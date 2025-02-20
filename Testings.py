@@ -1,236 +1,417 @@
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-from scipy.stats import norm
-import torch
-import torch.nn.functional as F
+import os
 from Detection import ONNXtoTorchModel
+import numpy as np
+import librosa
+# from tabulate import tabulate
+from colorama import init, Fore, Style
 
-class EnhancedSimilarityMatcher:
-    def __init__(self, positive_embeddings, negative_embeddings=None, noise_levels=None):
-        """
-        Initialize with positive and optional negative example embeddings
-        """
-        # Convert embeddings to numpy and ensure correct shape
-        self.positive_embeddings = np.array([emb.squeeze().cpu().numpy() for emb in positive_embeddings])
-        self.negative_embeddings = np.array([emb.squeeze().cpu().numpy() for emb in negative_embeddings]) if negative_embeddings else None
-        self.noise_levels = np.array(noise_levels) if noise_levels else None
-        
-        # Calculate statistics from positive examples
-        self.positive_centroid = np.mean(self.positive_embeddings, axis=0)
-        self.positive_std = np.std(self.positive_embeddings, axis=0)
-        
-        # Calculate decision boundaries if negative samples exist
-        if self.negative_embeddings is not None:
-            self.negative_centroid = np.mean(self.negative_embeddings, axis=0)
-            self._calculate_decision_boundary()
-    
-    def _calculate_decision_boundary(self):
-        """Calculate optimal decision boundary using positive and negative samples"""
-        pos_sims = self._batch_cosine_similarity(self.positive_embeddings, self.positive_centroid)
-        neg_sims = self._batch_cosine_similarity(self.negative_embeddings, self.positive_centroid)
-        
-        # Find optimal threshold that maximizes separation
-        all_sims = np.concatenate([pos_sims, neg_sims])
-        all_sims.sort()
-        
-        best_threshold = 0
-        best_separation = -float('inf')
-        
-        for threshold in all_sims:
-            pos_correct = np.mean(pos_sims >= threshold)
-            neg_correct = np.mean(neg_sims < threshold)
-            separation = pos_correct + neg_correct - 1
-            if separation > best_separation:
-                best_separation = separation
-                best_threshold = threshold
-        
-        self.decision_threshold = best_threshold
-    
-    def _batch_cosine_similarity(self, embeddings, reference):
-        """Calculate cosine similarity between embeddings and reference"""
-        # Ensure shapes are correct
-        if len(embeddings.shape) == 3:
-            embeddings = embeddings.squeeze(1)
-        if len(reference.shape) == 1:
-            reference = reference.reshape(1, -1)
-            
-        return cosine_similarity(embeddings, reference).flatten()
-    
-    def _adaptive_gaussian_kernel(self, distance, noise_level=0):
-        """Compute Gaussian kernel with adaptive sigma based on noise level"""
-        base_sigma = 0.4  # Increased to be more lenient with variations
-        max_sigma = 0.6  # Increased accordingly
-        
-        adaptive_sigma = base_sigma + (max_sigma - base_sigma) * noise_level
-        return norm.pdf(distance, loc=0, scale=adaptive_sigma)
-    
-    def compute_enhanced_similarity(self, query_embedding, noise_level=0):
-        """Compute enhanced similarity score using multiple metrics"""
-        # Ensure query_embedding is the right shape
-        query_embedding = query_embedding.squeeze()
-        
-        # 1. Cosine similarity with positive centroid
-        cosine_sim = cosine_similarity(
-            query_embedding.reshape(1, -1), 
-            self.positive_centroid.reshape(1, -1)
-        )[0][0]
-        
-        # 2. Average similarity to positive examples
-        pos_similarities = self._batch_cosine_similarity(self.positive_embeddings, query_embedding)
-        avg_pos_sim = np.mean(pos_similarities)
-        
-        # 3. Distance from negative samples (if available)
-        negative_penalty = 0
-        if self.negative_embeddings is not None:
-            neg_sims = self._batch_cosine_similarity(self.negative_embeddings, query_embedding)
-            negative_penalty = np.mean(neg_sims)
-        
-        # 4. Gaussian kernel similarity with adaptive sigma
-        embedding_distance = np.linalg.norm(query_embedding - self.positive_centroid)
-        gaussian_sim = self._adaptive_gaussian_kernel(embedding_distance, noise_level)
-        
-        # 5. Standard deviation check (penalize outliers)
-        std_penalty = np.mean(
-            np.abs(query_embedding - self.positive_centroid) > 2 * self.positive_std
-        )
-        
-        # Adjusted weights with more emphasis on positive similarities
-        weights = {
-            'cosine': 0.40,    # Increased to give more importance to direct similarity
-            'avg_pos': 0.30,   # Increased to better handle new positive samples
-            'gaussian': 0.20,  # Slightly reduced
-            'negative': 0.15,  # Increased to better penalize negative samples
-            'std': 0.05       # Kept same
-        }
-        
-        # Adjust weights based on noise level
-        if noise_level > 0.5:
-            weights['gaussian'] += 0.05  # Reduced from 0.1
-            weights['cosine'] -= 0.025   # Reduced penalty
-            weights['avg_pos'] -= 0.025  # Reduced penalty
-        
-        final_score = (
-            weights['cosine'] * cosine_sim +
-            weights['avg_pos'] * avg_pos_sim +
-            weights['gaussian'] * gaussian_sim -
-            weights['negative'] * negative_penalty -
-            weights['std'] * std_penalty
-        )
-        
-        # Normalize score to [0, 1] range
-        final_score = (final_score + 1) / 2
-        
-        return np.clip(final_score, 0, 1)  # Ensure score is between 0 and 1
-    
-    def is_wake_word(self, query_embedding, noise_level=0, threshold=None):
-        """Determine if the query embedding represents the wake word"""
-        similarity = self.compute_enhanced_similarity(query_embedding, noise_level)
-        
-        if threshold is None:
-            # Change to
-            # threshold = self.decision_threshold if hasattr(self, 'decision_threshold') else 0.55  # Lowered default threshold
-            threshold = 0.55
-            
-        return similarity > threshold, similarity
+init()
 
-def estimate_noise_level(audio, sr=16000):
-    """Estimate noise level in audio signal"""
-    signal_power = np.mean(audio ** 2)
-    peak_power = np.max(audio ** 2)
+from colorama import Fore, Style
+
+def tabulate(headers, results):
+    """
+    Prints a formatted table without using external libraries.
     
-    if peak_power > 0:
-        snr = 10 * np.log10(peak_power / signal_power)
-        noise_level = 1 / (1 + np.exp(0.1 * (snr - 10)))
-    else:
-        noise_level = 1.0
+    :param headers: List of column headers
+    :param results: List of row data
+    """
+    col_widths = [max(len(str(item)) for item in col) for col in zip(headers, *results)]
+    
+    def format_row(row):
+        return " | ".join(f"{str(item):<{col_widths[i]}}" for i, item in enumerate(row))
+    
+    print(f"\n{Fore.CYAN}=== Test Results ==={Style.RESET_ALL}")
+    print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
+    print(format_row(headers))
+    print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
+    for row in results:
+        print(format_row(row))
+    print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
+
+
+class WakeWordTester:
+    def __init__(self, model_path, positive_files, negative_files, threshold=0.55):
+        self.model = ONNXtoTorchModel(model_path)
+        self.threshold = threshold
         
-    return np.clip(noise_level, 0, 1)
+        self.positive_embeddings = []
+        self.negative_embeddings = []
+        
+        print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
+        for file in positive_files:
+            emb, audio, sr = self.process_audio(file)
+            self.positive_embeddings.append(emb)
+        
+        # Process negative examples
+        print(f"\n{Fore.RED}Processing negative examples...{Style.RESET_ALL}")
+
+        for file in negative_files:
+            emb, audio, sr = self.process_audio(file)
+            self.negative_embeddings.append(emb)
+        
+        
+    def process_audio(self, file_path, expected_length=24000):
+        """Process audio file and return embeddings"""
+        print(f"Processing: {os.path.basename(file_path)}")
+        audio, sr = librosa.load(file_path, sr=16000)
+        if len(audio) < expected_length:
+            audio = np.pad(audio, (0, expected_length - len(audio)), mode='constant')
+        audio = audio[:expected_length]
+        return self.model(audio), audio, sr
+
+    def detect(self, test_file):
+        """Run detection"""
+        # print(f"\n{Fore.CYAN}=== Wake Word Detection System Test ===\n{Style.RESET_ALL}")
+        
+        # Test results
+        results = []
+        # print(f"\n{Fore.YELLOW}Running tests...{Style.RESET_ALL}")
+        
+        print(f"\nTesting: {os.path.basename(test_file)}")
+        emb, audio, sr = self.process_audio(test_file)
+        
+        # Test against each positive sample
+        best_confidence = 0
+        best_metrics = None
+        
+        for pos_emb in self.positive_embeddings:
+            cosine_sim, gaussian_sim, angular_sim, combined_sim = self.model.enhanced_similarity(emb, pos_emb)
+            confidence = (cosine_sim + angular_sim) / 2  # Average of cosine and angular
+            
+            if confidence > best_confidence:
+                best_confidence = confidence
+                best_metrics = [cosine_sim, gaussian_sim, angular_sim, combined_sim]
+        
+        # Determine if wake word detected
+        is_wake_word = best_confidence > self.threshold
+            
+            
+            # Add result
+            # results.append([
+            #     os.path.basename(test_file),
+            #     f"{best_confidence:.4f}",
+            #     "✓" if is_wake_word else "✗",
+            #     f"{best_metrics[0]:.4f}",
+            #     f"{best_metrics[1]:.4f}",
+            #     f"{best_metrics[2]:.4f}",
+            #     f"{best_metrics[3]:.4f}",
+            #     f"{self.estimate_noise_level(audio):.4f}"
+            # ])
+        
+        # Print results table
+        # headers = ["File", "Confidence", "Detection", "Cosine", "Gaussian", "Angular", "Combined", "Noise Level"]
+        # print(f"\n{Fore.CYAN}=== Test Results ==={Style.RESET_ALL}")
+        # print(tabulate(headers, results))
+        # print(headers)
+        # print(results)
+        
+        # Print statistics
+        # detections = sum(1 for r in results if r[2] == "✓")
+        # print(f"\n{Fore.CYAN}=== Statistics ==={Style.RESET_ALL}")
+        # print(f"Total tests: {len(results)}")
+        # print(f"Detections: {detections}")
+        # print(f"Detection rate: {detections/len(results)*100:.2f}%")
+        
+        # return results
+
+    def estimate_noise_level(self, audio):
+        """Estimate noise level in audio signal"""
+        signal_power = np.mean(audio ** 2)
+        peak_power = np.max(audio ** 2)
+        
+        if peak_power > 0:
+            snr = 10 * np.log10(peak_power / signal_power)
+            noise_level = 1 / (1 + np.exp(0.1 * (snr - 10)))
+        else:
+            noise_level = 1.0
+        return noise_level
 
 if __name__ == "__main__":
+    # Define paths
+    base_dir = "./"
     
-    import librosa
+    # Model path
+    model_path = os.path.join(base_dir, "resnet_50_arc", "slim_93%_accuracy_72.7390%.onnx")
     
-    model = ONNXtoTorchModel(r"C:\Users\Rohit Francis\Desktop\Codes\Pathor Wake Word\EfficientWord-Net\eff_word_net\models\resnet_50_arc\slim_93%_accuracy_72.7390%.onnx")
-    # audio = np.random.randn(24000)  # 1.5 seconds at 16kHz
-    file_path = "audio2.wav"
-    # Load and resample to 16 kHz
-    audio, sr = librosa.load(file_path, sr=16000)
-    # Ensure audio is exactly 24000 samples long
-    expected_length = 24000
-    if len(audio) < expected_length:
-        pad_length = expected_length - len(audio)
-        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+    # Audio files
+    positive_files = [
+        os.path.join(base_dir, "tts_samples", "positive", "normal_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "normal_voice1.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "soft_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "soft_voice1.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "clear_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "clear_voice1.wav")
+    ]
+    
+    negative_files = [
+        os.path.join(base_dir, "tts_samples", "negative", "partial_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "negative", "partial_voice1.wav"),
+        os.path.join(base_dir, "tts_samples", "negative", "last_part_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "negative", "last_part_voice1.wav")
+    ]
+    
+    test_files = [
+        os.path.join(base_dir, "Recording.wav"),
+        os.path.join(base_dir, "Recording (2).wav"),
+        os.path.join(base_dir, "Recording (3).wav"),
+        os.path.join(base_dir, "Recording (4).wav"),
+        os.path.join(base_dir, "Recording (5).wav"),
+        os.path.join(base_dir, "Recording (6).wav"),
+        os.path.join(base_dir, "Recording (7).wav"),
+        os.path.join(base_dir, "dim_recording.wav"),
+        os.path.join(base_dir, "dim_recording2.wav"),
+        os.path.join(base_dir, "faint_voice.wav"),
+        os.path.join(base_dir, "faint_voice2.wav")
+    ]
+    
+    # Additional test with noisy samples
+    # test_files.extend([
+    #     os.path.join(base_dir, "tts_samples", "positive", "normal_voice0_noisy.wav"),
+    #     os.path.join(base_dir, "tts_samples", "positive", "soft_voice0_noisy.wav")
+    # ])
+    
+    # Run tests
+    tester = WakeWordTester(model_path)
+    results = tester.run_comprehensive_test(positive_files, negative_files, test_files)
 
-    print("Audio processing: ", audio.shape, sr)
-    embeddings_audio = model(audio)
-    print("Embeddings from audio shape:", embeddings_audio.shape)
-    
-    # audio = np.random.randn(24000)  # 1.5 seconds at 16kHz
-    file_path2 = "audio2_twin.wav"
-    # Load and resample to 16 kHz
-    audio2, sr = librosa.load(file_path2, sr=16000)
-    # Ensure audio is exactly 24000 samples long
-    expected_length = 24000
-    if len(audio2) < expected_length:
-        pad_length = expected_length - len(audio2)
-        audio2 = np.pad(audio2, (0, pad_length), mode='constant')  # Pad with zeros
 
-    embeddings_audio2 = model(audio2)
+
+
+
+# import numpy as np
+# from sklearn.metrics.pairwise import cosine_similarity
+# from scipy.stats import norm
+# import torch
+# import torch.nn.functional as F
+# from Detection import ONNXtoTorchModel
+
+# class EnhancedSimilarityMatcher:
+#     def __init__(self, positive_embeddings, negative_embeddings=None, noise_levels=None):
+#         """
+#         Initialize with positive and optional negative example embeddings
+#         """
+#         # Convert embeddings to numpy and ensure correct shape
+#         self.positive_embeddings = np.array([emb.squeeze().cpu().numpy() for emb in positive_embeddings])
+#         self.negative_embeddings = np.array([emb.squeeze().cpu().numpy() for emb in negative_embeddings]) if negative_embeddings else None
+#         self.noise_levels = np.array(noise_levels) if noise_levels else None
+        
+#         # Calculate statistics from positive examples
+#         self.positive_centroid = np.mean(self.positive_embeddings, axis=0)
+#         self.positive_std = np.std(self.positive_embeddings, axis=0)
+        
+#         # Calculate decision boundaries if negative samples exist
+#         if self.negative_embeddings is not None:
+#             self.negative_centroid = np.mean(self.negative_embeddings, axis=0)
+#             self._calculate_decision_boundary()
+    
+#     def _calculate_decision_boundary(self):
+#         """Calculate optimal decision boundary using positive and negative samples"""
+#         pos_sims = self._batch_cosine_similarity(self.positive_embeddings, self.positive_centroid)
+#         neg_sims = self._batch_cosine_similarity(self.negative_embeddings, self.positive_centroid)
+        
+#         # Find optimal threshold that maximizes separation
+#         all_sims = np.concatenate([pos_sims, neg_sims])
+#         all_sims.sort()
+        
+#         best_threshold = 0
+#         best_separation = -float('inf')
+        
+#         for threshold in all_sims:
+#             pos_correct = np.mean(pos_sims >= threshold)
+#             neg_correct = np.mean(neg_sims < threshold)
+#             separation = pos_correct + neg_correct - 1
+#             if separation > best_separation:
+#                 best_separation = separation
+#                 best_threshold = threshold
+        
+#         self.decision_threshold = best_threshold
+    
+#     def _batch_cosine_similarity(self, embeddings, reference):
+#         """Calculate cosine similarity between embeddings and reference"""
+#         # Ensure shapes are correct
+#         if len(embeddings.shape) == 3:
+#             embeddings = embeddings.squeeze(1)
+#         if len(reference.shape) == 1:
+#             reference = reference.reshape(1, -1)
+            
+#         return cosine_similarity(embeddings, reference).flatten()
+    
+#     def _adaptive_gaussian_kernel(self, distance, noise_level=0):
+#         """Compute Gaussian kernel with adaptive sigma based on noise level"""
+#         base_sigma = 0.4  # Increased to be more lenient with variations
+#         max_sigma = 0.6  # Increased accordingly
+        
+#         adaptive_sigma = base_sigma + (max_sigma - base_sigma) * noise_level
+#         return norm.pdf(distance, loc=0, scale=adaptive_sigma)
+    
+#     def compute_enhanced_similarity(self, query_embedding, noise_level=0):
+#         """Compute enhanced similarity score using multiple metrics"""
+#         # Ensure query_embedding is the right shape
+#         query_embedding = query_embedding.squeeze()
+        
+#         # 1. Cosine similarity with positive centroid
+#         cosine_sim = cosine_similarity(
+#             query_embedding.reshape(1, -1), 
+#             self.positive_centroid.reshape(1, -1)
+#         )[0][0]
+        
+#         # 2. Average similarity to positive examples
+#         pos_similarities = self._batch_cosine_similarity(self.positive_embeddings, query_embedding)
+#         avg_pos_sim = np.mean(pos_similarities)
+        
+#         # 3. Distance from negative samples (if available)
+#         negative_penalty = 0
+#         if self.negative_embeddings is not None:
+#             neg_sims = self._batch_cosine_similarity(self.negative_embeddings, query_embedding)
+#             negative_penalty = np.mean(neg_sims)
+        
+#         # 4. Gaussian kernel similarity with adaptive sigma
+#         embedding_distance = np.linalg.norm(query_embedding - self.positive_centroid)
+#         gaussian_sim = self._adaptive_gaussian_kernel(embedding_distance, noise_level)
+        
+#         # 5. Standard deviation check (penalize outliers)
+#         std_penalty = np.mean(
+#             np.abs(query_embedding - self.positive_centroid) > 2 * self.positive_std
+#         )
+        
+#         # Adjusted weights with more emphasis on positive similarities
+#         weights = {
+#             'cosine': 0.40,    # Increased to give more importance to direct similarity
+#             'avg_pos': 0.30,   # Increased to better handle new positive samples
+#             'gaussian': 0.20,  # Slightly reduced
+#             'negative': 0.15,  # Increased to better penalize negative samples
+#             'std': 0.05       # Kept same
+#         }
+        
+#         # Adjust weights based on noise level
+#         if noise_level > 0.5:
+#             weights['gaussian'] += 0.05  # Reduced from 0.1
+#             weights['cosine'] -= 0.025   # Reduced penalty
+#             weights['avg_pos'] -= 0.025  # Reduced penalty
+        
+#         final_score = (
+#             weights['cosine'] * cosine_sim +
+#             weights['avg_pos'] * avg_pos_sim +
+#             weights['gaussian'] * gaussian_sim -
+#             weights['negative'] * negative_penalty -
+#             weights['std'] * std_penalty
+#         )
+        
+#         # Normalize score to [0, 1] range
+#         final_score = (final_score + 1) / 2
+        
+#         return np.clip(final_score, 0, 1)  # Ensure score is between 0 and 1
+    
+#     def is_wake_word(self, query_embedding, noise_level=0, threshold=None):
+#         """Determine if the query embedding represents the wake word"""
+#         similarity = self.compute_enhanced_similarity(query_embedding, noise_level)
+        
+#         if threshold is None:
+#             # Change to
+#             # threshold = self.decision_threshold if hasattr(self, 'decision_threshold') else 0.55  # Lowered default threshold
+#             threshold = 0.55
+            
+#         return similarity > threshold, similarity
+
+# def estimate_noise_level(audio, sr=16000):
+#     """Estimate noise level in audio signal"""
+#     signal_power = np.mean(audio ** 2)
+#     peak_power = np.max(audio ** 2)
+    
+#     if peak_power > 0:
+#         snr = 10 * np.log10(peak_power / signal_power)
+#         noise_level = 1 / (1 + np.exp(0.1 * (snr - 10)))
+#     else:
+#         noise_level = 1.0
+        
+#     return np.clip(noise_level, 0, 1)
+
+# if __name__ == "__main__":
+    
+#     import librosa
+    
+#     model = ONNXtoTorchModel(r"C:\Users\Rohit Francis\Desktop\Codes\Pathor Wake Word\EfficientWord-Net\eff_word_net\models\resnet_50_arc\slim_93%_accuracy_72.7390%.onnx")
+#     # audio = np.random.randn(24000)  # 1.5 seconds at 16kHz
+#     file_path = "audio2.wav"
+#     # Load and resample to 16 kHz
+#     audio, sr = librosa.load(file_path, sr=16000)
+#     # Ensure audio is exactly 24000 samples long
+#     expected_length = 24000
+#     if len(audio) < expected_length:
+#         pad_length = expected_length - len(audio)
+#         audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+
+#     print("Audio processing: ", audio.shape, sr)
+#     embeddings_audio = model(audio)
+#     print("Embeddings from audio shape:", embeddings_audio.shape)
+    
+#     # audio = np.random.randn(24000)  # 1.5 seconds at 16kHz
+#     file_path2 = "audio2_twin.wav"
+#     # Load and resample to 16 kHz
+#     audio2, sr = librosa.load(file_path2, sr=16000)
+#     # Ensure audio is exactly 24000 samples long
+#     expected_length = 24000
+#     if len(audio2) < expected_length:
+#         pad_length = expected_length - len(audio2)
+#         audio2 = np.pad(audio2, (0, pad_length), mode='constant')  # Pad with zeros
+
+#     embeddings_audio2 = model(audio2)
          
     
-    file_path = "audio.wav"
-    # Load and resample to 16 kHz
-    audio, sr = librosa.load(file_path, sr=16000)
-    # Ensure audio is exactly 24000 samples long
-    expected_length = 24000
-    if len(audio) < expected_length:
-        pad_length = expected_length - len(audio)
-        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+#     file_path = "audio.wav"
+#     # Load and resample to 16 kHz
+#     audio, sr = librosa.load(file_path, sr=16000)
+#     # Ensure audio is exactly 24000 samples long
+#     expected_length = 24000
+#     if len(audio) < expected_length:
+#         pad_length = expected_length - len(audio)
+#         audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
 
-    print("Audio processing: ", audio.shape, sr)
-    embeddings_audio3 = model(audio)
-    print("Embeddings from audio shape:", embeddings_audio3.shape)
+#     print("Audio processing: ", audio.shape, sr)
+#     embeddings_audio3 = model(audio)
+#     print("Embeddings from audio shape:", embeddings_audio3.shape)
     
     
-    file_path = "audio_twin.wav"
-    # Load and resample to 16 kHz
-    audio, sr = librosa.load(file_path, sr=16000)
-    # Ensure audio is exactly 24000 samples long
-    expected_length = 24000
-    if len(audio) < expected_length:
-        pad_length = expected_length - len(audio)
-        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+#     file_path = "audio_twin.wav"
+#     # Load and resample to 16 kHz
+#     audio, sr = librosa.load(file_path, sr=16000)
+#     # Ensure audio is exactly 24000 samples long
+#     expected_length = 24000
+#     if len(audio) < expected_length:
+#         pad_length = expected_length - len(audio)
+#         audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
 
-    print("Audio processing: ", audio.shape, sr)
-    embeddings_audio4 = model(audio)
-    print("Embeddings from audio shape:", embeddings_audio4.shape)
+#     print("Audio processing: ", audio.shape, sr)
+#     embeddings_audio4 = model(audio)
+#     print("Embeddings from audio shape:", embeddings_audio4.shape)
     
-    positive_embeddings = [embeddings_audio, embeddings_audio2]
-    negative_embeddings = [embeddings_audio3, embeddings_audio4]
-    
-    
+#     positive_embeddings = [embeddings_audio, embeddings_audio2]
+#     negative_embeddings = [embeddings_audio3, embeddings_audio4]
     
     
-    file_path = "test.wav"
-    # Load and resample to 16 kHz
-    audio, sr = librosa.load(file_path, sr=16000)
-    # Ensure audio is exactly 24000 samples long
-    expected_length = 24000
-    if len(audio) < expected_length:
-        pad_length = expected_length - len(audio)
-        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+    
+    
+#     file_path = "test.wav"
+#     # Load and resample to 16 kHz
+#     audio, sr = librosa.load(file_path, sr=16000)
+#     # Ensure audio is exactly 24000 samples long
+#     expected_length = 24000
+#     if len(audio) < expected_length:
+#         pad_length = expected_length - len(audio)
+#         audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
 
-    query_embeddings = model(audio)
-    query_embeddings = query_embeddings.detach().numpy()
-    noise_levels = estimate_noise_level(audio)
+#     query_embeddings = model(audio)
+#     query_embeddings = query_embeddings.detach().numpy()
+#     noise_levels = estimate_noise_level(audio)
     
-    matcher = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings, noise_levels)    
+#     matcher = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings, noise_levels)    
 
-    # For detection
-    noise_level = estimate_noise_level(audio)
-    is_wake_word, confidence = matcher.is_wake_word(query_embeddings, noise_level)
+#     # For detection
+#     noise_level = estimate_noise_level(audio)
+#     is_wake_word, confidence = matcher.is_wake_word(query_embeddings, noise_level)
 
-    print(is_wake_word, confidence)
+#     print(is_wake_word, confidence)
 
 
 
