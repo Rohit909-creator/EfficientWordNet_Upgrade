@@ -7,6 +7,7 @@ from typing import Optional, Dict
 import json
 import os
 from Detection import ONNXtoTorchModel  # Import your model class
+from Testings import EnhancedSimilarityMatcher
 
 class SimpleMicStream:
     """Handles real-time audio capture from microphone"""
@@ -59,7 +60,8 @@ class HotwordDetector:
                  hotword: str,
                  reference_file: str,
                  model_path: str,
-                 threshold: float = 0.75,
+                 matcher: EnhancedSimilarityMatcher,
+                 threshold: float = 0.55,
                  window_length: float = 1.5):
         self.hotword = hotword
         self.threshold = threshold
@@ -72,6 +74,9 @@ class HotwordDetector:
         
         # Initialize model
         self.model = ONNXtoTorchModel(model_path)
+        
+        # Store the matcher
+        self.matcher = matcher
         
         # Buffer for collecting audio frames
         self.audio_buffer = np.array([], dtype=np.float32)
@@ -98,56 +103,115 @@ class HotwordDetector:
             # Get embeddings for current audio
             current_embeddings = self.model(audio_window)
             
-            # Compute similarity with reference embeddings
-            # similarity = self.model.compute_similarity(
-            #     current_embeddings, 
-            #     self.reference_embeddings
-            # )
+            # Use the matcher to determine if this is a wake word
+            noise_level = self.matcher.estimate_noise_level(audio_window)
             
-            # Enhanced Similarity test
-            cosine_sim, gausian_sim, angular_sim, combined_sim = self.model.enhanced_similarity(
-                current_embeddings, 
-                self.reference_embeddings
-            )
-            
+            is_wake_word, confidence, similarities = self.matcher.is_wake_word(current_embeddings, noise_level)
             
             # Trim buffer to prevent memory growth
             self.audio_buffer = self.audio_buffer[-self.window_samples:]
             
-            # Check if similarity exceeds threshold
-            if cosine_sim >= self.threshold:
+            # Check if confidence exceeds threshold
+            if is_wake_word and confidence >= self.threshold:
                 return {
                     "match": True,
-                    "confidence": float(cosine_sim)
+                    "confidence": float(confidence),
+                    "similarities": similarities
                 }
                 
-            if gausian_sim >= self.threshold:
-                return {
-                    "match": True,
-                    "confidence": float(cosine_sim)
-                }
-                
-            if angular_sim >= self.threshold:
-                return {
-                    "match": True,
-                    "confidence": float(cosine_sim)
-                }
-            
-            if combined_sim >= self.threshold:
-                return {
-                    "match": True,
-                    "confidence": float(cosine_sim)
-                }
-                
-            
-        return {"match": False, "confidence": 0.0}
+        return {"match": False, "confidence": 0.0, "similarities": {}}
 
 def main():
+    
+    import librosa
+    from colorama import Fore, Style
+    
+    base_dir = "./"
+    
+    model_path = os.path.join(base_dir, "resnet_50_arc", "slim_93%_accuracy_72.7390%.onnx")
+    model = ONNXtoTorchModel(model_path)
+    
+    positive_files = [
+        os.path.join(base_dir, "tts_samples", "positive", "normal_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "normal_voice1.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "soft_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "soft_voice1.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "clear_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "positive", "clear_voice1.wav")
+    ]
+    
+    negative_files = [
+        os.path.join(base_dir, "tts_samples", "negative", "partial_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "negative", "partial_voice1.wav"),
+        os.path.join(base_dir, "tts_samples", "negative", "last_part_voice0.wav"),
+        os.path.join(base_dir, "tts_samples", "negative", "last_part_voice1.wav")
+    ]
+    
+    test_files = [
+        os.path.join(base_dir, "Recording.wav"),
+        os.path.join(base_dir, "Recording (2).wav"),
+        os.path.join(base_dir, "Recording (3).wav"),
+        os.path.join(base_dir, "Recording (4).wav"),
+        os.path.join(base_dir, "Recording (5).wav"),
+        os.path.join(base_dir, "Recording (6).wav"),
+        os.path.join(base_dir, "Recording (7).wav"),
+        os.path.join(base_dir, "dim_recording.wav"),
+        os.path.join(base_dir, "dim_recording2.wav"),
+        os.path.join(base_dir, "faint_voice.wav"),
+        os.path.join(base_dir, "faint_voice2.wav"),
+        os.path.join(base_dir, "Recording_negative (1).wav"),
+        os.path.join(base_dir, "Recording_negative (2).wav"),
+        os.path.join(base_dir, "Recording_negative (3).wav"),
+        os.path.join(base_dir, "Recording_negative (4).wav"),
+        os.path.join(base_dir, "Recording_negative (5).wav"),
+        os.path.join(base_dir, "dim_recording_negative (1).wav"),
+        os.path.join(base_dir, "dim_recording_negative (2).wav"),
+        os.path.join(base_dir, "dim_recording_negative (3).wav"),
+        os.path.join(base_dir, "dim_recording_negative (4).wav"),
+        os.path.join(base_dir, "dim_recording_negative (5).wav"),
+        os.path.join(base_dir, "dim_recording_negative (6).wav"),
+        os.path.join(base_dir, "dim_recording_negative (7).wav"),
+    ]
+        
+    # Process positive examples
+    print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
+    positive_embeddings = []
+    for file in positive_files:
+        
+        audio, sr = librosa.load(file, sr=16000)
+        # Ensure audio is exactly 24000 samples long
+        expected_length = 24000
+        if len(audio) < expected_length:
+            pad_length = expected_length - len(audio)
+            audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+        
+        emb = model(audio)
+        positive_embeddings.append(emb)
+    
+    # Process negative examples
+    print(f"{Fore.RED}Processing negative examples...{Style.RESET_ALL}")
+    negative_embeddings = []
+    for file in negative_files:
+        
+        audio, sr = librosa.load(file, sr=16000)
+        # Ensure audio is exactly 24000 samples long
+        expected_length = 24000
+        if len(audio) < expected_length:
+            pad_length = expected_length - len(audio)
+            audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+        
+        emb = model(audio)
+        negative_embeddings.append(emb)
+    
+    # Initialize matcher
+    matcher = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings)
+    
     # Initialize detector with your ONNX model path
     wake_word_detector = HotwordDetector(
         hotword="Hey Assistant",
         reference_file="path_to_reference.json",  # Contains reference embeddings
-        model_path=r"C:\Users\Rohit Francis\Desktop\Codes\Pathor Wake Word\EfficientWord-Net\eff_word_net\models\resnet_50_arc\slim_93%_accuracy_72.7390%.onnx",
+        model_path="./resnet_50_arc/slim_93%_accuracy_72.7390%.onnx",
+        matcher=matcher,
         threshold=0.5  # Adjust based on your needs
     )
     
