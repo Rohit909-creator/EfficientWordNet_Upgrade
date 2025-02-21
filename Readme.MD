@@ -44,7 +44,7 @@ EfficientWordNet, originally developed by AntBrain, has been upgraded with a mor
 3. its good to install `ffmpeg` 
 4. Use `recording_audio.py` for recording reference embeddings for ur wakeword.
 5. Run `main.py` to test the improved similarity matching algorithm in realtime.
-6. Use `new_testings.py` for baseline model comparison and alternative similarity operations.
+6. Use `TabulateTest.py` for baseline model comparison and alternative similarity operations.
 
 
 
