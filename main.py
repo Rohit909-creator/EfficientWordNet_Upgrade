@@ -148,29 +148,29 @@ def main():
     ]
     
     test_files = [
-        os.path.join(base_dir, "Recording.wav"),
-        os.path.join(base_dir, "Recording (2).wav"),
-        os.path.join(base_dir, "Recording (3).wav"),
-        os.path.join(base_dir, "Recording (4).wav"),
-        os.path.join(base_dir, "Recording (5).wav"),
-        os.path.join(base_dir, "Recording (6).wav"),
-        os.path.join(base_dir, "Recording (7).wav"),
-        os.path.join(base_dir, "dim_recording.wav"),
-        os.path.join(base_dir, "dim_recording2.wav"),
-        os.path.join(base_dir, "faint_voice.wav"),
-        os.path.join(base_dir, "faint_voice2.wav"),
-        os.path.join(base_dir, "Recording_negative (1).wav"),
-        os.path.join(base_dir, "Recording_negative (2).wav"),
-        os.path.join(base_dir, "Recording_negative (3).wav"),
-        os.path.join(base_dir, "Recording_negative (4).wav"),
-        os.path.join(base_dir, "Recording_negative (5).wav"),
-        os.path.join(base_dir, "dim_recording_negative (1).wav"),
-        os.path.join(base_dir, "dim_recording_negative (2).wav"),
-        os.path.join(base_dir, "dim_recording_negative (3).wav"),
-        os.path.join(base_dir, "dim_recording_negative (4).wav"),
-        os.path.join(base_dir, "dim_recording_negative (5).wav"),
-        os.path.join(base_dir, "dim_recording_negative (6).wav"),
-        os.path.join(base_dir, "dim_recording_negative (7).wav"),
+        os.path.join(base_dir, "Test_files", "Recording.wav"),
+        os.path.join(base_dir, "Test_files","Recording (2).wav"),
+        os.path.join(base_dir, "Test_files","Recording (3).wav"),
+        os.path.join(base_dir, "Test_files","Recording (4).wav"),
+        os.path.join(base_dir, "Test_files","Recording (5).wav"),
+        os.path.join(base_dir, "Test_files","Recording (6).wav"),
+        os.path.join(base_dir, "Test_files","Recording (7).wav"),
+        os.path.join(base_dir, "Test_files","dim_recording.wav"),
+        os.path.join(base_dir, "Test_files","dim_recording2.wav"),
+        os.path.join(base_dir, "Test_files","faint_voice.wav"),
+        os.path.join(base_dir, "Test_files","faint_voice2.wav"),
+        os.path.join(base_dir, "Test_files","Recording_negative (1).wav"),
+        os.path.join(base_dir, "Test_files","Recording_negative (2).wav"),
+        os.path.join(base_dir, "Test_files","Recording_negative (3).wav"),
+        os.path.join(base_dir, "Test_files","Recording_negative (4).wav"),
+        os.path.join(base_dir, "Test_files","Recording_negative (5).wav"),
+        os.path.join(base_dir, "Test_files","dim_recording_negative (1).wav"),
+        os.path.join(base_dir, "Test_files","dim_recording_negative (2).wav"),
+        os.path.join(base_dir, "Test_files","dim_recording_negative (3).wav"),
+        os.path.join(base_dir, "Test_files","dim_recording_negative (4).wav"),
+        os.path.join(base_dir, "Test_files","dim_recording_negative (5).wav"),
+        os.path.join(base_dir, "Test_files","dim_recording_negative (6).wav"),
+        os.path.join(base_dir, "Test_files","dim_recording_negative (7).wav"),
     ]
         
     # Process positive examples
@@ -208,10 +208,11 @@ def main():
     
     # Initialize detector with your ONNX model path
     wake_word_detector = HotwordDetector(
-        hotword="Hey Assistant",
+        hotword="Skywalker",
         reference_file="path_to_reference.json",  # Contains reference embeddings
         model_path="./resnet_50_arc/slim_93%_accuracy_72.7390%.onnx",
         matcher=matcher,
+        window_length=1.5,
         threshold=0.5  # Adjust based on your needs
     )
     
