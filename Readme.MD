@@ -2,7 +2,7 @@
 
 ## Overview
 
-### Disclaimer: This here is in development below will be the expected upgrades, as of now, it works 🫡
+### Disclaimer: First Test the wakeword with the default threshold and then adjust it, according to ur needs fr optimal performance
 
 
 
@@ -42,8 +42,9 @@ EfficientWordNet, originally developed by AntBrain, has been upgraded with a mor
 1. Clone the repository and install the required dependencies.
 2. run `pip install -r requirments.txt` 
 3. its good to install `ffmpeg` 
-4. Run `Testings.py` to test the improved similarity matching algorithm.
-5. Use `Detection.py` for baseline model comparison and alternative similarity operations.
+4. Use `recording_audio.py` for recording reference embeddings for ur wakeword.
+5. Run `main.py` to test the improved similarity matching algorithm in realtime.
+6. Use `new_testings.py` for baseline model comparison and alternative similarity operations.
 
 
 

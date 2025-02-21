@@ -131,13 +131,24 @@ def main():
     model_path = os.path.join(base_dir, "resnet_50_arc", "slim_93%_accuracy_72.7390%.onnx")
     model = ONNXtoTorchModel(model_path)
     
+    
+    dir_list = os.listdir(os.path.join(base_dir, "wake_word_data", "recordings"))
+    
+    # positive_files = []
+    
+    # for folder in dir_list:
+    #     audio_files = os.listdir(os.path.join(base_dir, "wake_word_data", "recordings", folder))
+    #     for audio_file in audio_files:
+    #         positive_files.append(os.path.join(base_dir, "wake_word_data", "recordings", folder, audio_file))
+     
+    
     positive_files = [
-        os.path.join(base_dir, "tts_samples", "positive", "normal_voice0.wav"),
-        os.path.join(base_dir, "tts_samples", "positive", "normal_voice1.wav"),
-        os.path.join(base_dir, "tts_samples", "positive", "soft_voice0.wav"),
-        os.path.join(base_dir, "tts_samples", "positive", "soft_voice1.wav"),
-        os.path.join(base_dir, "tts_samples", "positive", "clear_voice0.wav"),
-        os.path.join(base_dir, "tts_samples", "positive", "clear_voice1.wav")
+        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Alexa_quick_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Alexa_shouted_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Alexa_whispered_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_2.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_3.wav")
     ]
     
     negative_files = [
@@ -147,31 +158,6 @@ def main():
         os.path.join(base_dir, "tts_samples", "negative", "last_part_voice1.wav")
     ]
     
-    test_files = [
-        os.path.join(base_dir, "Test_files", "Recording.wav"),
-        os.path.join(base_dir, "Test_files","Recording (2).wav"),
-        os.path.join(base_dir, "Test_files","Recording (3).wav"),
-        os.path.join(base_dir, "Test_files","Recording (4).wav"),
-        os.path.join(base_dir, "Test_files","Recording (5).wav"),
-        os.path.join(base_dir, "Test_files","Recording (6).wav"),
-        os.path.join(base_dir, "Test_files","Recording (7).wav"),
-        os.path.join(base_dir, "Test_files","dim_recording.wav"),
-        os.path.join(base_dir, "Test_files","dim_recording2.wav"),
-        os.path.join(base_dir, "Test_files","faint_voice.wav"),
-        os.path.join(base_dir, "Test_files","faint_voice2.wav"),
-        os.path.join(base_dir, "Test_files","Recording_negative (1).wav"),
-        os.path.join(base_dir, "Test_files","Recording_negative (2).wav"),
-        os.path.join(base_dir, "Test_files","Recording_negative (3).wav"),
-        os.path.join(base_dir, "Test_files","Recording_negative (4).wav"),
-        os.path.join(base_dir, "Test_files","Recording_negative (5).wav"),
-        os.path.join(base_dir, "Test_files","dim_recording_negative (1).wav"),
-        os.path.join(base_dir, "Test_files","dim_recording_negative (2).wav"),
-        os.path.join(base_dir, "Test_files","dim_recording_negative (3).wav"),
-        os.path.join(base_dir, "Test_files","dim_recording_negative (4).wav"),
-        os.path.join(base_dir, "Test_files","dim_recording_negative (5).wav"),
-        os.path.join(base_dir, "Test_files","dim_recording_negative (6).wav"),
-        os.path.join(base_dir, "Test_files","dim_recording_negative (7).wav"),
-    ]
         
     # Process positive examples
     print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
@@ -208,7 +194,7 @@ def main():
     
     # Initialize detector with your ONNX model path
     wake_word_detector = HotwordDetector(
-        hotword="Skywalker",
+        hotword="Alexa",
         reference_file="path_to_reference.json",  # Contains reference embeddings
         model_path="./resnet_50_arc/slim_93%_accuracy_72.7390%.onnx",
         matcher=matcher,

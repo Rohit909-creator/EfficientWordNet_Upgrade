@@ -1,259 +1,3 @@
-import pyaudio
-import wave
-import numpy as np
-import os
-import time
-import sounddevice as sd
-import soundfile as sf
-from pathlib import Path
-import requests
-import tempfile
-from typing import List, Dict, Optional
-import json
-from colorama import Fore, Style, init
-
-# Initialize colorama for cross-platform colored terminal output
-init()
-
-class WakeWordRecorder:
-    def __init__(self, 
-                 wake_word: str,
-                 sample_rate: int = 16000, 
-                 channels: int = 1,
-                 duration: int = 3,
-                 output_dir: str = "./reference"):
-        self.wake_word = wake_word
-        self.sample_rate = sample_rate
-        self.channels = channels
-        self.duration = duration  # recording duration in seconds
-        self.chunk = 1024
-        self.format = pyaudio.paInt16
-        
-        # Ensure output directories exist
-        self.output_dir = Path(output_dir)
-        self.positive_dir = self.output_dir / "positive"
-        self.positive_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Audio device setup
-        self.audio = pyaudio.PyAudio()
-        
-    def _record_audio(self) -> np.ndarray:
-        """Record audio from microphone"""
-        print(f"{Fore.YELLOW}Recording will start in 3 seconds...{Style.RESET_ALL}")
-        for i in range(3, 0, -1):
-            print(f"{i}...")
-            time.sleep(1)
-            
-        print(f"{Fore.GREEN}Recording now! Speak your wake word...{Style.RESET_ALL}")
-        
-        frames = []
-        stream = self.audio.open(
-            format=self.format,
-            channels=self.channels,
-            rate=self.sample_rate,
-            input=True,
-            frames_per_buffer=self.chunk
-        )
-        
-        # Record for specified duration
-        for _ in range(0, int(self.sample_rate / self.chunk * self.duration)):
-            data = stream.read(self.chunk)
-            frames.append(data)
-        
-        print(f"{Fore.GREEN}Recording complete!{Style.RESET_ALL}")
-        
-        # Close stream
-        stream.stop_stream()
-        stream.close()
-        
-        # Convert to numpy array
-        audio_data = np.frombuffer(b''.join(frames), dtype=np.int16)
-        return audio_data
-    
-    def _save_audio(self, audio_data: np.ndarray, filename: str) -> str:
-        """Save audio data to a WAV file"""
-        filepath = self.positive_dir / filename
-        
-        with wave.open(str(filepath), 'wb') as wf:
-            wf.setnchannels(self.channels)
-            wf.setsampwidth(self.audio.get_sample_size(self.format))
-            wf.setframerate(self.sample_rate)
-            wf.writeframes(audio_data.tobytes())
-        
-        return str(filepath)
-    
-    def _play_audio(self, filepath: str) -> None:
-        """Play audio file for confirmation"""
-        print(f"{Fore.BLUE}Playing back your recording...{Style.RESET_ALL}")
-        data, fs = sf.read(filepath)
-        sd.play(data, fs)
-        sd.wait()
-    
-    def generate_tts_samples(self, api_key: Optional[str] = None) -> List[str]:
-        """Generate TTS samples of the wake word using an AI API"""
-        if not api_key:
-            print(f"{Fore.RED}No API key provided. Skipping TTS generation.{Style.RESET_ALL}")
-            return []
-        
-        variations = [
-            f"{self.wake_word}",
-            f"{self.wake_word}?",
-            f"Hey, {self.wake_word}",
-            f"{self.wake_word}, are you there?",
-            f"Um, {self.wake_word}",
-            f"{self.wake_word}, I need your help"
-        ]
-        
-        tts_files = []
-        
-        try:
-            # Here we'd implement the API call to a TTS service
-            # For example, using OpenAI's TTS API or ElevenLabs
-            # This is a placeholder for the actual implementation
-            
-            print(f"{Fore.BLUE}Generating AI voice samples for '{self.wake_word}'...{Style.RESET_ALL}")
-            
-            # Placeholder for API call
-            for i, text in enumerate(variations):
-                # In a real implementation, this would make an API call
-                # Here we're just creating placeholder files
-                filepath = self.positive_dir / f"tts_sample_{i}.wav"
-                
-                # Placeholder: In reality, we'd save the API response
-                with open(filepath, 'wb') as f:
-                    # Generate a short silence file as placeholder
-                    temp_audio = np.zeros(self.sample_rate * 2, dtype=np.int16)
-                    sf.write(filepath, temp_audio, self.sample_rate)
-                
-                tts_files.append(str(filepath))
-                print(f"  Generated sample for: '{text}'")
-            
-            print(f"{Fore.GREEN}Successfully generated {len(tts_files)} TTS samples{Style.RESET_ALL}")
-            
-        except Exception as e:
-            print(f"{Fore.RED}Error generating TTS samples: {e}{Style.RESET_ALL}")
-        
-        return tts_files
-    
-    def record_samples(self) -> Dict[str, List[str]]:
-        """Record different variations of the wake word"""
-        recording_types = [
-            {"name": "normal", "prompt": f"Say the wake word '{self.wake_word}' normally or casually"},
-            {"name": "quick", "prompt": f"Say the wake word '{self.wake_word}' quickly"},
-            {"name": "loud", "prompt": f"Shout the wake word '{self.wake_word}'"},
-            {"name": "whisper", "prompt": f"Whisper the wake word '{self.wake_word}'"}
-        ]
-        
-        recordings = {"user_samples": [], "ai_samples": []}
-        
-        # Record user samples
-        print(f"{Fore.CYAN}===== RECORDING WAKE WORD SAMPLES FOR '{self.wake_word}' ====={Style.RESET_ALL}")
-        print("We'll record 4 different variations of how you say your wake word.")
-        print("This helps create a more robust model that responds to different speaking styles.")
-        
-        for idx, rec_type in enumerate(recording_types):
-            print(f"\n{Fore.CYAN}Recording {idx+1}/4: {rec_type['name'].upper()}{Style.RESET_ALL}")
-            input(f"{rec_type['prompt']}. Press Enter to start recording...")
-            
-            # Record audio
-            audio_data = self._record_audio()
-            
-            # Save to file
-            filename = f"{self.wake_word.replace(' ', '_')}_{rec_type['name']}.wav"
-            filepath = self._save_audio(audio_data, filename)
-            recordings["user_samples"].append(filepath)
-            
-            # Play back for confirmation
-            self._play_audio(filepath)
-            
-            while True:
-                response = input(f"Is this recording good? (y/n): ").lower()
-                if response == 'y':
-                    print(f"{Fore.GREEN}Great! Moving to next recording.{Style.RESET_ALL}")
-                    break
-                elif response == 'n':
-                    print(f"{Fore.YELLOW}Let's try again.{Style.RESET_ALL}")
-                    audio_data = self._record_audio()
-                    filepath = self._save_audio(audio_data, filename)
-                    recordings["user_samples"][-1] = filepath
-                    self._play_audio(filepath)
-                else:
-                    print(f"{Fore.RED}Please enter 'y' or 'n'.{Style.RESET_ALL}")
-        
-        # Ask if user wants AI-generated samples as well
-        print(f"\n{Fore.CYAN}Would you like to generate AI voice samples as additional training data?{Style.RESET_ALL}")
-        print("This can improve detection accuracy with varied speech patterns.")
-        
-        response = input("Generate AI samples? (y/n): ").lower()
-        if response == 'y':
-            api_key = input("Enter your TTS API key (leave blank to skip): ").strip()
-            if api_key:
-                ai_samples = self.generate_tts_samples(api_key)
-                recordings["ai_samples"] = ai_samples
-            else:
-                print(f"{Fore.YELLOW}No API key provided. Skipping AI sample generation.{Style.RESET_ALL}")
-        
-        # Cleanup
-        self.audio.terminate()
-        
-        # Save metadata
-        metadata = {
-            "wake_word": self.wake_word,
-            "sample_rate": self.sample_rate,
-            "channels": self.channels,
-            "user_samples": recordings["user_samples"],
-            "ai_samples": recordings["ai_samples"],
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-        }
-        
-        with open(self.output_dir / "metadata.json", "w") as f:
-            json.dump(metadata, f, indent=4)
-        
-        return recordings
-
-def create_embeddings(recordings: Dict[str, List[str]], model_path: str) -> None:
-    """Create embeddings from recorded samples"""
-    # This would use your ONNXtoTorchModel to create embeddings
-    # For the recorded samples and save them to a reference file
-    
-    print(f"{Fore.CYAN}Generating embeddings from recorded samples...{Style.RESET_ALL}")
-    
-    # Placeholder for the actual embedding creation
-    # In a real implementation, this would:
-    # 1. Load your ONNX model
-    # 2. Process each audio file to generate embeddings
-    # 3. Save the embeddings to a reference file
-    
-    print(f"{Fore.GREEN}Successfully created embeddings for wake word detection!{Style.RESET_ALL}")
-
-def main():
-    print(f"{Fore.CYAN}===== WAKE WORD RECORDER =====\n{Style.RESET_ALL}")
-    
-    wake_word = input("What wake word would you like to use? (e.g., 'Hey Assistant'): ")
-    
-    if not wake_word.strip():
-        print(f"{Fore.RED}Error: Wake word cannot be empty.{Style.RESET_ALL}")
-        return
-    
-    # Create recorder instance
-    recorder = WakeWordRecorder(wake_word=wake_word)
-    
-    # Record samples
-    recordings = recorder.record_samples()
-    
-    # Create embeddings from recordings
-    model_path = "./resnet_50_arc/slim_93%_accuracy_72.7390%.onnx"
-    create_embeddings(recordings, model_path)
-    
-    print(f"\n{Fore.GREEN}===== WAKE WORD SETUP COMPLETE ====={Style.RESET_ALL}")
-    print(f"Wake word '{wake_word}' has been set up with {len(recordings['user_samples'])} user samples " +
-          f"and {len(recordings['ai_samples'])} AI samples.")
-    print(f"Reference files saved to: {recorder.output_dir}")
-    print(f"\n{Fore.YELLOW}You can now use this wake word with your voice assistant.{Style.RESET_ALL}")
-
-if __name__ == "__main__":
-    main()
-
 # import os
 # import numpy as np
 # import librosa
@@ -616,6 +360,265 @@ if __name__ == "__main__":
     
 #     # Run comprehensive test
 #     results = matcher.run_comprehensive_test(model, test_files)
+
+
+
+# import pyaudio
+# import wave
+# import numpy as np
+# import os
+# import time
+# import sounddevice as sd
+# import soundfile as sf
+# from pathlib import Path
+# import requests
+# import tempfile
+# from typing import List, Dict, Optional
+# import json
+# from colorama import Fore, Style, init
+
+# # Initialize colorama for cross-platform colored terminal output
+# init()
+
+# class WakeWordRecorder:
+#     def __init__(self, 
+#                  wake_word: str,
+#                  sample_rate: int = 16000, 
+#                  channels: int = 1,
+#                  duration: int = 3,
+#                  output_dir: str = "./reference"):
+#         self.wake_word = wake_word
+#         self.sample_rate = sample_rate
+#         self.channels = channels
+#         self.duration = duration  # recording duration in seconds
+#         self.chunk = 1024
+#         self.format = pyaudio.paInt16
+        
+#         # Ensure output directories exist
+#         self.output_dir = Path(output_dir)
+#         self.positive_dir = self.output_dir / "positive"
+#         self.positive_dir.mkdir(parents=True, exist_ok=True)
+        
+#         # Audio device setup
+#         self.audio = pyaudio.PyAudio()
+        
+#     def _record_audio(self) -> np.ndarray:
+#         """Record audio from microphone"""
+#         print(f"{Fore.YELLOW}Recording will start in 3 seconds...{Style.RESET_ALL}")
+#         for i in range(3, 0, -1):
+#             print(f"{i}...")
+#             time.sleep(1)
+            
+#         print(f"{Fore.GREEN}Recording now! Speak your wake word...{Style.RESET_ALL}")
+        
+#         frames = []
+#         stream = self.audio.open(
+#             format=self.format,
+#             channels=self.channels,
+#             rate=self.sample_rate,
+#             input=True,
+#             frames_per_buffer=self.chunk
+#         )
+        
+#         # Record for specified duration
+#         for _ in range(0, int(self.sample_rate / self.chunk * self.duration)):
+#             data = stream.read(self.chunk)
+#             frames.append(data)
+        
+#         print(f"{Fore.GREEN}Recording complete!{Style.RESET_ALL}")
+        
+#         # Close stream
+#         stream.stop_stream()
+#         stream.close()
+        
+#         # Convert to numpy array
+#         audio_data = np.frombuffer(b''.join(frames), dtype=np.int16)
+#         return audio_data
+    
+#     def _save_audio(self, audio_data: np.ndarray, filename: str) -> str:
+#         """Save audio data to a WAV file"""
+#         filepath = self.positive_dir / filename
+        
+#         with wave.open(str(filepath), 'wb') as wf:
+#             wf.setnchannels(self.channels)
+#             wf.setsampwidth(self.audio.get_sample_size(self.format))
+#             wf.setframerate(self.sample_rate)
+#             wf.writeframes(audio_data.tobytes())
+        
+#         return str(filepath)
+    
+#     def _play_audio(self, filepath: str) -> None:
+#         """Play audio file for confirmation"""
+#         print(f"{Fore.BLUE}Playing back your recording...{Style.RESET_ALL}")
+#         data, fs = sf.read(filepath)
+#         sd.play(data, fs)
+#         sd.wait()
+    
+#     def generate_tts_samples(self, api_key: Optional[str] = None) -> List[str]:
+#         """Generate TTS samples of the wake word using an AI API"""
+#         if not api_key:
+#             print(f"{Fore.RED}No API key provided. Skipping TTS generation.{Style.RESET_ALL}")
+#             return []
+        
+#         variations = [
+#             f"{self.wake_word}",
+#             f"{self.wake_word}?",
+#             f"Hey, {self.wake_word}",
+#             f"{self.wake_word}, are you there?",
+#             f"Um, {self.wake_word}",
+#             f"{self.wake_word}, I need your help"
+#         ]
+        
+#         tts_files = []
+        
+#         try:
+#             # Here we'd implement the API call to a TTS service
+#             # For example, using OpenAI's TTS API or ElevenLabs
+#             # This is a placeholder for the actual implementation
+            
+#             print(f"{Fore.BLUE}Generating AI voice samples for '{self.wake_word}'...{Style.RESET_ALL}")
+            
+#             # Placeholder for API call
+#             for i, text in enumerate(variations):
+#                 # In a real implementation, this would make an API call
+#                 # Here we're just creating placeholder files
+#                 filepath = self.positive_dir / f"tts_sample_{i}.wav"
+                
+#                 # Placeholder: In reality, we'd save the API response
+#                 with open(filepath, 'wb') as f:
+#                     # Generate a short silence file as placeholder
+#                     temp_audio = np.zeros(self.sample_rate * 2, dtype=np.int16)
+#                     sf.write(filepath, temp_audio, self.sample_rate)
+                
+#                 tts_files.append(str(filepath))
+#                 print(f"  Generated sample for: '{text}'")
+            
+#             print(f"{Fore.GREEN}Successfully generated {len(tts_files)} TTS samples{Style.RESET_ALL}")
+            
+#         except Exception as e:
+#             print(f"{Fore.RED}Error generating TTS samples: {e}{Style.RESET_ALL}")
+        
+#         return tts_files
+    
+#     def record_samples(self) -> Dict[str, List[str]]:
+#         """Record different variations of the wake word"""
+#         recording_types = [
+#             {"name": "normal", "prompt": f"Say the wake word '{self.wake_word}' normally or casually"},
+#             {"name": "quick", "prompt": f"Say the wake word '{self.wake_word}' quickly"},
+#             {"name": "loud", "prompt": f"Shout the wake word '{self.wake_word}'"},
+#             {"name": "whisper", "prompt": f"Whisper the wake word '{self.wake_word}'"}
+#         ]
+        
+#         recordings = {"user_samples": [], "ai_samples": []}
+        
+#         # Record user samples
+#         print(f"{Fore.CYAN}===== RECORDING WAKE WORD SAMPLES FOR '{self.wake_word}' ====={Style.RESET_ALL}")
+#         print("We'll record 4 different variations of how you say your wake word.")
+#         print("This helps create a more robust model that responds to different speaking styles.")
+        
+#         for idx, rec_type in enumerate(recording_types):
+#             print(f"\n{Fore.CYAN}Recording {idx+1}/4: {rec_type['name'].upper()}{Style.RESET_ALL}")
+#             input(f"{rec_type['prompt']}. Press Enter to start recording...")
+            
+#             # Record audio
+#             audio_data = self._record_audio()
+            
+#             # Save to file
+#             filename = f"{self.wake_word.replace(' ', '_')}_{rec_type['name']}.wav"
+#             filepath = self._save_audio(audio_data, filename)
+#             recordings["user_samples"].append(filepath)
+            
+#             # Play back for confirmation
+#             self._play_audio(filepath)
+            
+#             while True:
+#                 response = input(f"Is this recording good? (y/n): ").lower()
+#                 if response == 'y':
+#                     print(f"{Fore.GREEN}Great! Moving to next recording.{Style.RESET_ALL}")
+#                     break
+#                 elif response == 'n':
+#                     print(f"{Fore.YELLOW}Let's try again.{Style.RESET_ALL}")
+#                     audio_data = self._record_audio()
+#                     filepath = self._save_audio(audio_data, filename)
+#                     recordings["user_samples"][-1] = filepath
+#                     self._play_audio(filepath)
+#                 else:
+#                     print(f"{Fore.RED}Please enter 'y' or 'n'.{Style.RESET_ALL}")
+        
+#         # Ask if user wants AI-generated samples as well
+#         print(f"\n{Fore.CYAN}Would you like to generate AI voice samples as additional training data?{Style.RESET_ALL}")
+#         print("This can improve detection accuracy with varied speech patterns.")
+        
+#         response = input("Generate AI samples? (y/n): ").lower()
+#         if response == 'y':
+#             api_key = input("Enter your TTS API key (leave blank to skip): ").strip()
+#             if api_key:
+#                 ai_samples = self.generate_tts_samples(api_key)
+#                 recordings["ai_samples"] = ai_samples
+#             else:
+#                 print(f"{Fore.YELLOW}No API key provided. Skipping AI sample generation.{Style.RESET_ALL}")
+        
+#         # Cleanup
+#         self.audio.terminate()
+        
+#         # Save metadata
+#         metadata = {
+#             "wake_word": self.wake_word,
+#             "sample_rate": self.sample_rate,
+#             "channels": self.channels,
+#             "user_samples": recordings["user_samples"],
+#             "ai_samples": recordings["ai_samples"],
+#             "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+#         }
+        
+#         with open(self.output_dir / "metadata.json", "w") as f:
+#             json.dump(metadata, f, indent=4)
+        
+#         return recordings
+
+# def create_embeddings(recordings: Dict[str, List[str]], model_path: str) -> None:
+#     """Create embeddings from recorded samples"""
+#     # This would use your ONNXtoTorchModel to create embeddings
+#     # For the recorded samples and save them to a reference file
+    
+#     print(f"{Fore.CYAN}Generating embeddings from recorded samples...{Style.RESET_ALL}")
+    
+#     # Placeholder for the actual embedding creation
+#     # In a real implementation, this would:
+#     # 1. Load your ONNX model
+#     # 2. Process each audio file to generate embeddings
+#     # 3. Save the embeddings to a reference file
+    
+#     print(f"{Fore.GREEN}Successfully created embeddings for wake word detection!{Style.RESET_ALL}")
+
+# def main():
+#     print(f"{Fore.CYAN}===== WAKE WORD RECORDER =====\n{Style.RESET_ALL}")
+    
+#     wake_word = input("What wake word would you like to use? (e.g., 'Hey Assistant'): ")
+    
+#     if not wake_word.strip():
+#         print(f"{Fore.RED}Error: Wake word cannot be empty.{Style.RESET_ALL}")
+#         return
+    
+#     # Create recorder instance
+#     recorder = WakeWordRecorder(wake_word=wake_word)
+    
+#     # Record samples
+#     recordings = recorder.record_samples()
+    
+#     # Create embeddings from recordings
+#     model_path = "./resnet_50_arc/slim_93%_accuracy_72.7390%.onnx"
+#     create_embeddings(recordings, model_path)
+    
+#     print(f"\n{Fore.GREEN}===== WAKE WORD SETUP COMPLETE ====={Style.RESET_ALL}")
+#     print(f"Wake word '{wake_word}' has been set up with {len(recordings['user_samples'])} user samples " +
+#           f"and {len(recordings['ai_samples'])} AI samples.")
+#     print(f"Reference files saved to: {recorder.output_dir}")
+#     print(f"\n{Fore.YELLOW}You can now use this wake word with your voice assistant.{Style.RESET_ALL}")
+
+# if __name__ == "__main__":
+#     main()
+
 
 # if __name__ == "__main__":
 #     # Define paths
