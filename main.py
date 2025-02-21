@@ -7,7 +7,7 @@ from typing import Optional, Dict
 import json
 import os
 from Detection import ONNXtoTorchModel  # Import your model class
-from Testings import EnhancedSimilarityMatcher
+from Detection import EnhancedSimilarityMatcher
 
 class SimpleMicStream:
     """Handles real-time audio capture from microphone"""
@@ -61,7 +61,7 @@ class HotwordDetector:
                  reference_file: str,
                  model_path: str,
                  matcher: EnhancedSimilarityMatcher,
-                 threshold: float = 0.55,
+                 threshold: float = 0.60,
                  window_length: float = 1.5):
         self.hotword = hotword
         self.threshold = threshold
