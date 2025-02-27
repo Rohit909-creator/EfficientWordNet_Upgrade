@@ -143,21 +143,29 @@ def main():
      
     
     positive_files = [
-        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Alexa_quick_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Alexa_shouted_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Alexa_whispered_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_2.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_3.wav")
+        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Ava_normal_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Ava_quick_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Ava_shouted_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Ava_whispered_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Ava_normal_2.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Ava_normal_3.wav")
     ]
+    
+    # negative_files = [
+    #     os.path.join(base_dir, "tts_samples", "negative", "partial_voice0.wav"),
+    #     os.path.join(base_dir, "tts_samples", "negative", "partial_voice1.wav"),
+    #     os.path.join(base_dir, "tts_samples", "negative", "last_part_voice0.wav"),
+    #     os.path.join(base_dir, "tts_samples", "negative", "last_part_voice1.wav")
+    # ]
+    
     
     negative_files = [
-        os.path.join(base_dir, "tts_samples", "negative", "partial_voice0.wav"),
-        os.path.join(base_dir, "tts_samples", "negative", "partial_voice1.wav"),
-        os.path.join(base_dir, "tts_samples", "negative", "last_part_voice0.wav"),
-        os.path.join(base_dir, "tts_samples", "negative", "last_part_voice1.wav")
+        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Hello_normal_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Hello_quick_1.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_2.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Jeeva_shouted_3.wav"),
+        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Jeeva_normal_3.wav")
     ]
-    
         
     # Process positive examples
     print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
@@ -194,7 +202,7 @@ def main():
     
     # Initialize detector with your ONNX model path
     wake_word_detector = HotwordDetector(
-        hotword="Alexa",
+        hotword="Ava",
         reference_file="path_to_reference.json",  # Contains reference embeddings
         model_path="./resnet_50_arc/slim_93%_accuracy_72.7390%.onnx",
         matcher=matcher,

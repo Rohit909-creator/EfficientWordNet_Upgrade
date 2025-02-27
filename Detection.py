@@ -239,12 +239,21 @@ class EnhancedSimilarityMatcher:
         
         # ADJUSTED WEIGHTS based on test results analysis
         weights = {
-            'cosine': 0.45,      # Keep this as is - it's a strong indicator
-            'avg_pos': 0.35,     # Keep this as is - it's helpful for faint voices
-            'gaussian': 0.15,    # Keep this as is
-            'negative': 0.20,    # Increase from 0.10 to 0.20 - put more weight on negative examples
-            'std': 0.05          # Increase from 0.03 to 0.05 - be more strict about standard deviation
+            'cosine': 0.40,      # Keep this as is - it's a strong indicator
+            'avg_pos': 0.30,     # Keep this as is - it's helpful for faint voices
+            'gaussian': 0.15,    # Keep this as is, The Gaussian gives more credit to samples that are "in the neighborhood" of your centroid.
+            'negative': 0.40,    # Increase from 0.10 to 0.20 - put more weight on negative examples
+            'std': 0.10          # Increase from 0.03 to 0.05 - be more strict about standard deviation
         }
+        
+        # OLD WEIGHTS based on test results analysis
+        # weights = {
+        #     'cosine': 0.45,      # Keep this as is - it's a strong indicator
+        #     'avg_pos': 0.35,     # Keep this as is - it's helpful for faint voices
+        #     'gaussian': 0.15,    # Keep this as is, The Gaussian gives more credit to samples that are "in the neighborhood" of your centroid.
+        #     'negative': 0.20,    # Increase from 0.10 to 0.20 - put more weight on negative examples
+        #     'std': 0.05          # Increase from 0.03 to 0.05 - be more strict about standard deviation
+        # }
 
         # Adjust the noise level handling
         if noise_level > 0.3:
@@ -294,8 +303,9 @@ class EnhancedSimilarityMatcher:
         similarity, metrics = self.compute_enhanced_similarity(query_embedding.detach().numpy(), noise_level)
         
         if threshold is None:
-            threshold = getattr(self, 'decision_threshold', 0.55)  # Default to 0.55 if no decision_threshold
-            print(f"Decision Threshold set to {threshold} based on current noise_levels")
+            # threshold = getattr(self, 'decision_threshold', 0.55)  # Default to 0.55 if no decision_threshold
+            threshold = 0.67
+            # print(f"Decision Threshold set to {threshold} based on current noise_levels")
             # threshold = 0.60
             
         return similarity > threshold, similarity, metrics
