@@ -1,7 +1,7 @@
 {
-    "cosine": 0.45,
+    "cosine": 0.6,
     "avg_pos": 0.3,
-    "gaussian": 0.15,
-    "negative": 0.375,
-    "std": 0.07500000000000001
+    "gaussian": 0.25,
+    "negative": 0.22499999999999992,
+    "std": 0.05
 }
