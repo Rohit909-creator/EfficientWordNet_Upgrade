@@ -1,8 +1,13 @@
 import numpy as np
 from scipy.spatial.distance import cdist
 from sklearn.preprocessing import normalize
+import requests
+import json
+import os
+import time
 
-def enhance_similarity_scores(emb1, emb2, method='enhanced_cosine'):
+
+def enhance_similarity_scores(emb1, emb2, method='enhanced_cosine', cos_sim=None):
     """
     Calculate similarity between embeddings using various methods.
     
@@ -42,9 +47,9 @@ def enhance_similarity_scores(emb1, emb2, method='enhanced_cosine'):
         angular_sim = 1 - np.arccos(np.clip(cos_sim, -1, 1)) / np.pi
         return angular_sim.max()
     
-    def combined_similarity(e1, e2):
+    def combined_similarity(e1, e2, cos_sim):
         # Combine multiple similarity measures
-        cos_sim = enhanced_cosine(e1, e2)
+        # cos_sim = enhanced_cosine(e1, e2)
         gauss_sim = gaussian_kernel(e1, e2)
         ang_sim = angular_similarity(e1, e2)
         
@@ -66,7 +71,8 @@ def enhance_similarity_scores(emb1, emb2, method='enhanced_cosine'):
     
     if method not in methods:
         raise ValueError(f"Method {method} not supported. Choose from {list(methods.keys())}")
-    
+    if method == 'combined':
+        return methods[method](emb1, emb2, cos_sim)    
     return methods[method](emb1, emb2)
 
 def preprocess_embeddings(emb):
@@ -89,6 +95,90 @@ def preprocess_embeddings(emb):
     # return emb
 
 
+def generate_wakewords(wakeword:str):
+    # API request for TTS
+    
+    voice_ids = {"en-US-zion":{"style": "Promo", "multiNativeLocale": "en-US"}, 
+                 "en-US-natalie":{"style": "Promo", "multiNativeLocale": "en-US"}, 
+                 "en-IN-aarav":{"style": "Conversational", "multiNativeLocale": "en-IN"},
+                 "en-IN-alia":{"style": "Promo", "multiNativeLocale": "en-IN"},
+                 "en-UK-theo":{"style": "Narration", "multiNativeLocale": "en-UK"},
+                 "en-UK-ruby":{"style": "Conversational", "multiNativeLocale": "en-UK"},
+                 "en-AU-kylie":{"style": "Conversational", "multiNativeLocale": "en-AU"},
+                 "en-AU-jimm":{"style": "Conversational", "multiNativeLocale": "en-AU"}
+                #  "zh-CN-tao":{"style": "Conversational", "multiNativeLocale": "zh-CN"},
+                #  "zh-CN-jiao":{"style": "Conversational", "multiNativeLocale": "zh-CN"}
+                 }
+    
+    url = "https://api.murf.ai/v1/speech/generate"
+    
+    
+    for key in list(voice_ids.keys()):
+    
+        style = voice_ids[key]['style']
+        multiNativeLocale = voice_ids[key]['multiNativeLocale']
+    
+        payload = json.dumps({
+        "voiceId": key,
+        "style": style,
+        "text": wakeword,
+        "rate": 0,
+        "pitch": 0,
+        "sampleRate": 48000,
+        "format": "MP3",
+        "channelType": "MONO",
+        "pronunciationDictionary": {},
+        "encodeAsBase64": False,
+        "variation": 1,
+        "audioDuration": 0,
+        "modelVersion": "GEN2",
+        "multiNativeLocale": multiNativeLocale
+        })
+        headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'api-key': 'ap2_39e885d1-b227-45bc-b193-c37797a4045c'
+        }
+
+        # Make the TTS API request
+        response = requests.request("POST", url, headers=headers, data=payload)
+        response_data = response.json()
+
+        # Print the full response for debugging
+        # print(response.text)
+        # print(response_data.keys())
+
+        # Check if the API request was successful and contains the audio file URL
+        if response.status_code == 200 and 'audioFile' in response_data:
+            # Get the audio file URL
+            audio_url = response_data['audioFile']
+            
+            # Define the output filename (you can customize this)
+            output_filename = f"{wakeword}_{key}.mp3"
+            
+            # Download the audio file
+            audio_response = requests.get(audio_url)
+            
+            # Check if the download was successful
+            if audio_response.status_code == 200:
+                # Save the audio file
+                with open(output_filename, 'wb') as f:
+                    f.write(audio_response.content)
+                print(f"Audio file downloaded successfully as '{output_filename}'")
+            else:
+                print(f"Failed to download audio file. Status code: {audio_response.status_code}")
+        else:
+            print("Failed to generate audio or audio_file URL not found in response")
+            print(f"Status code: {response.status_code}")
+
+        time.sleep(0.5)
+
+if __name__ == "__main__":
+    
+    words = ["Tony", "Alexa", "Sam", "Sneha"]
+    for word in words:
+        generate_wakewords(word)
+        time.sleep(2)
 
 
 # Results:

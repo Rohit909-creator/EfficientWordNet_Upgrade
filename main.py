@@ -142,13 +142,26 @@ def main():
     #         positive_files.append(os.path.join(base_dir, "wake_word_data", "recordings", folder, audio_file))
      
     
+    # positive_files = [
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Salo_normal_1.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Salo_quick_1.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Salo_shouted_1.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Salo_whispered_1.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Salo_normal_2.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Salo_whispered_3.wav")
+    # ]
+    
     positive_files = [
-        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Alexa_quick_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Alexa_shouted_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Alexa_whispered_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_2.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_3.wav")
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-AU-jimm.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-AU-kylie.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-IN-aarav.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-IN-alia.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-UK-ruby.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-UK-theo.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-US-natalie.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-US-zion.mp3"),
+        # os.path.join(base_dir, "tts_samples", "negative", f"Aira1.mp3"),
+        # os.path.join(base_dir, "tts_samples", "negative", f"Aira0.mp3"),
     ]
     
     # negative_files = [
@@ -157,16 +170,32 @@ def main():
     #     os.path.join(base_dir, "tts_samples", "negative", "last_part_voice0.wav"),
     #     os.path.join(base_dir, "tts_samples", "negative", "last_part_voice1.wav")
     # ]
-    
-    
     negative_files = [
-        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Hello_normal_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Hello_quick_1.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Eliza_normal_2.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Eliza_shouted_3.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Eliza_whispered_3.wav"),
-        os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Jeeva_normal_1.wav"),
+        os.path.join(base_dir, "tts_samples", "negative", "Hello0.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Hello1.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-natalie.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-natalie.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-natalie.mp3"),
     ]
+    
+    
+    # negative_files = [
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Hello_normal_1.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Hello_quick_1.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Ava_normal_2.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Ava_shouted_3.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Salo_normal_3.wav"),
+    #     os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Jeeva_normal_1.wav"),
+    # ]
         
     # Process positive examples
     print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
@@ -203,7 +232,7 @@ def main():
     
     # Initialize detector with your ONNX model path
     wake_word_detector = HotwordDetector(
-        hotword="Alexa",
+        hotword="Nobita",
         reference_file="path_to_reference.json",  # Contains reference embeddings
         model_path="./resnet_50_arc/slim_93%_accuracy_72.7390%.onnx",
         matcher=matcher,

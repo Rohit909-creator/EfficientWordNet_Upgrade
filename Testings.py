@@ -1,3 +1,20 @@
+
+# import pyttsx3
+# import time
+# engine = pyttsx3.init()  # Initialize the TTS engine
+# word = "Nobheetha"
+# voices = engine.getProperty('voices')
+# engine.setProperty('voice', voices[0].id)
+# engine.say(word)  # Queue text for speaking
+# engine.save_to_file(word, rf"C:\Users\Rohit Francis\Documents\GitHub\EfficientWordNet_Upgrade\tts_samples\negative\{word}0.mp3")
+# engine.runAndWait()  # Process the speech
+
+# engine.setProperty('voice', voices[1].id)
+# engine.say(word)  # Queue text for speaking
+# engine.runAndWait()  # Process the speech
+# engine.save_to_file(word, rf"C:\Users\Rohit Francis\Documents\GitHub\EfficientWordNet_Upgrade\tts_samples\negative\{word}1.mp3")
+# engine.runAndWait()  # Process the speech
+# print("All saved")
 # import os
 # import nltk
 # import subprocess
@@ -383,80 +400,148 @@
 
 
 
-# # Test code
-# import json
-# import librosa
-# from colorama import Fore, Style
-# from Detection import ONNXtoTorchModel
-# import os
-# import numpy as np
+# Test code
+import json
+import librosa
+from colorama import Fore, Style
+from Detection import ONNXtoTorchModel
+import os
+import numpy as np
 
-# base_dir = "./"
+word = "SnehaAIGen"
+negative_word = "none" 
 
-# model_path = os.path.join(base_dir, "resnet_50_arc", "slim_93%_accuracy_72.7390%.onnx")
-# model = ONNXtoTorchModel(model_path)
+base_dir = "./"
+
+model_path = os.path.join(base_dir, "resnet_50_arc", "slim_93%_accuracy_72.7390%.onnx")
+model = ONNXtoTorchModel(model_path)
+
+
+positive_files = [
+    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-AU-jimm.mp3"),
+    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-AU-kylie.mp3"),
+    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-IN-aarav.mp3"),
+    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-IN-alia.mp3"),
+    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-UK-ruby.mp3"),
+    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-UK-theo.mp3"),
+    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-US-natalie.mp3"),
+    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-US-zion.mp3"),
+    os.path.join(base_dir, "wake_word_data", "recordings", "normal", f"Sneha_normal_1.wav"),
+    os.path.join(base_dir, "wake_word_data", "recordings", "normal", f"Sneha_normal_2.wav"),
+    # os.path.join(base_dir, "tts_samples", "negative", f"Aira1.mp3"),
+    # os.path.join(base_dir, "tts_samples", "negative", f"Aira0.mp3"),
+]
+
 
 # positive_files = [
-#     os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_1.wav"),
-#     os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Alexa_quick_1.wav"),
-#     os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Alexa_shouted_1.wav"),
-#     os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Alexa_whispered_1.wav"),
-#     os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_2.wav"),
-#     os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Alexa_normal_3.wav")
+#     os.path.join(base_dir, "wake_word_data", "recordings", "normal", f"{word}_normal_1.wav"),
+#     os.path.join(base_dir, "wake_word_data", "recordings", "quick", f"{word}_quick_1.wav"),
+#     os.path.join(base_dir, "wake_word_data", "recordings", "shouted", f"{word}_shouted_1.wav"),
+#     os.path.join(base_dir, "wake_word_data", "recordings", "whispered", f"{word}_whispered_1.wav"),
+#     os.path.join(base_dir, "tts_samples", "negative", f"{word}1.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", f"{word}0.mp3"),
+#     # os.path.join(base_dir, "tts_samples", "negative", f"Aira1.mp3"),
+#     # os.path.join(base_dir, "tts_samples", "negative", f"Aira0.mp3"),
 # ]
 
 # negative_files = [
 #     os.path.join(base_dir, "tts_samples", "negative", "partial_voice0.wav"),
 #     os.path.join(base_dir, "tts_samples", "negative", "partial_voice1.wav"),
 #     os.path.join(base_dir, "tts_samples", "negative", "last_part_voice0.wav"),
-#     os.path.join(base_dir, "tts_samples", "negative", "last_part_voice1.wav")
+#     os.path.join(base_dir, "tts_samples", "negative", "last_part_voice1.wav"),
+# #      os.path.join(base_dir, "tts_samples", "negative", f"{negative_word}1.mp3"),
+# #      os.path.join(base_dir, "tts_samples", "negative", f"{negative_word}0.mp3")
 # ]
 
-    
-# # Process positive examples
-# print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
-# positive_embeddings = []
-# for file in positive_files:
-    
-#     audio, sr = librosa.load(file, sr=16000)
-#     # Ensure audio is exactly 24000 samples long
-#     expected_length = 24000
-#     if len(audio) < expected_length:
-#         pad_length = expected_length - len(audio)
-#         audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
-    
-#     emb = model(audio)
-#     positive_embeddings.append(emb.detach().tolist()[0])
+# negative_files = [
+#     os.path.join(base_dir, "tts_samples", "negative", "Hello0.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", "Hello1.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", "Xylophone0.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", "Xylophone1.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", f"Thunderbolt1.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", f"Thunderbolt0.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", f"Quasar1.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", f"Quasar0.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", f"{negative_word}1.mp3"),
+#     os.path.join(base_dir, "tts_samples", "negative", f"{negative_word}0.mp3")
+# ]
 
-# # Process negative examples
-# print(f"{Fore.RED}Processing negative examples...{Style.RESET_ALL}")
-# negative_embeddings = []
-# for file in negative_files:
+# negative_files = [
+#         os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Hello_normal_1.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Hello_quick_1.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Ham_normal_2.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Ham_shouted_3.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Ham_whispered_3.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Jeeva_normal_1.wav"),
+#     ]
+
+negative_files = [
+        # os.path.join(base_dir, "tts_samples", "negative", "Hello0.mp3"),
+        # os.path.join(base_dir, "tts_samples", "negative", "Hello1.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-natalie.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-natalie.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-natalie.mp3"),
+    ]
+# Old negative reference
+# negative_files = [
+#         os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Hello_normal_1.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "quick", "Hello_quick_1.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Eliza_normal_2.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "shouted", "Eliza_shouted_3.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "whispered", "Eliza_whispered_3.wav"),
+#         os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Jeeva_normal_1.wav"),
+#     ]
     
-#     audio, sr = librosa.load(file, sr=16000)
-#     # Ensure audio is exactly 24000 samples long
-#     expected_length = 24000
-#     if len(audio) < expected_length:
-#         pad_length = expected_length - len(audio)
-#         audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+# Process positive examples
+print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
+positive_embeddings = []
+for file in positive_files:
     
-#     emb = model(audio)
-#     negative_embeddings.append(emb.detach().tolist()[0])
+    audio, sr = librosa.load(file, sr=16000)
+    # Ensure audio is exactly 24000 samples long
+    expected_length = 24000
+    if len(audio) < expected_length:
+        pad_length = expected_length - len(audio)
+        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+    
+    emb = model(audio)
+    positive_embeddings.append(emb.detach().tolist()[0])
+
+# Process negative examples
+print(f"{Fore.RED}Processing negative examples...{Style.RESET_ALL}")
+negative_embeddings = []
+for file in negative_files:
+    
+    audio, sr = librosa.load(file, sr=16000)
+    # Ensure audio is exactly 24000 samples long
+    expected_length = 24000
+    if len(audio) < expected_length:
+        pad_length = expected_length - len(audio)
+        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+    
+    emb = model(audio)
+    negative_embeddings.append(emb.detach().tolist()[0])
 
 
 # print(positive_embeddings[0])
 
-# data = {"positive_embeddings":positive_embeddings, 
-#         "negative_embeddings": negative_embeddings}
+data = {"positive_embeddings":positive_embeddings, 
+        "negative_embeddings": negative_embeddings}
 
-# with open("data.json", "w") as f:
-#     s = json.dumps(data)
-#     f.write(s)
+with open(f"{word}_{negative_word}_ref.json", "w") as f:
+    s = json.dumps(data)
+    f.write(s)
 
-
-
-
-
+print(f"saved {word}_{negative_word}_ref.json")
 # {
 #     "positive_embeddings": [
 #         [0.02489, 0.0471, ...],
