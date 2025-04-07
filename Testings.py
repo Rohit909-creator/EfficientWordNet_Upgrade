@@ -1,4 +1,629 @@
+import tensorflow as tf
+import os
+import numpy as np
+import librosa
+import torch
+import torch.nn as nn
+import onnxruntime
+import numpy as np
+from python_speech_features import logfbank
+import librosa
+from UTILS import enhance_similarity_scores, preprocess_embeddings
+from colorama import Fore, Style
 
+def cosine_similarity(a, b, axis=1, eps=1e-8):
+    """
+    Compute cosine similarity between tensors a and b along specified axis
+    Handles different input dimensions appropriately
+    """
+    # Check dimensions and adjust axis if needed
+    if len(tf.shape(a)) == 1:
+        a = tf.expand_dims(a, 0)
+        if axis == 1:
+            axis = 0
+    
+    if len(tf.shape(b)) == 1:
+        b = tf.expand_dims(b, 0)
+        if axis == 1:
+            axis = 0
+    
+    # Normalize and compute similarity
+    a_norm = tf.nn.l2_normalize(a, axis=axis, epsilon=eps)
+    b_norm = tf.nn.l2_normalize(b, axis=axis, epsilon=eps)
+    
+    # Ensure output has appropriate dimensions
+    return tf.reduce_sum(a_norm * b_norm, axis=axis)
+
+
+class ONNXtoTorchModel(nn.Module):
+    def __init__(self, onnx_path):
+        super().__init__()
+        # Load ONNX model
+        self.session = onnxruntime.InferenceSession(onnx_path)
+        self.input_name = self.session.get_inputs()[0].name
+        self.output_name = self.session.get_outputs()[0].name
+        self.window_length = 1.5
+        self.window_frames = int(self.window_length * 16000)
+        
+    def compute_logfbank_features(self, inpAudio):
+        """
+        Compute log Mel-filterbank features
+        """
+        return logfbank(
+            inpAudio,
+            samplerate=16000,
+            winlen=0.025,
+            winstep=0.01,
+            nfilt=64,
+            nfft=512,
+            preemph=0.0
+        )
+    
+    def get_embeddings(self, audio):
+        """
+        Convert audio to embeddings
+        Args:
+            audio: numpy array of shape (window_frames,) - 1.5 seconds of audio at 16kHz
+        Returns:
+            embeddings: torch tensor of embeddings
+        """
+        assert audio.shape == (self.window_frames,), f"Expected audio shape {self.window_frames}, got {audio.shape}"
+        
+        # Compute log mel features
+        features = self.compute_logfbank_features(audio)
+        
+        # Add batch and channel dimensions
+        features = np.expand_dims(features, axis=(0,1))
+        features = np.float32(features)
+        
+        # Get embeddings from ONNX model
+        outputs = self.session.run(
+            [self.output_name],
+            {self.input_name: features}
+        )[0]
+        
+        return torch.from_numpy(outputs)
+    
+    def forward(self, x):
+        """
+        Forward pass - handles both audio and pre-computed mel spectrograms
+        Args:
+            x: Either audio waveform or mel spectrogram
+        Returns:
+            embeddings: torch tensor of embeddings
+        """
+        if isinstance(x, torch.Tensor):
+            x = x.detach().cpu().numpy()
+            
+        if len(x.shape) == 1:  # Audio waveform
+            return self.get_embeddings(x)
+        else:  # Mel spectrogram
+            # Add batch and channel dimensions if needed
+            if len(x.shape) == 2:
+                x = np.expand_dims(x, axis=(0,1))
+            x = np.float32(x)
+            outputs = self.session.run([self.output_name], {self.input_name: x})[0]
+            return torch.from_numpy(outputs)
+        
+    def compute_similarity(self, emb1, emb2):
+        """
+        Compute similarity between two embeddings using cosine similarity
+        """
+        if isinstance(emb1, torch.Tensor):
+            emb1 = emb1.detach().cpu().numpy()
+        if isinstance(emb2, torch.Tensor):
+            emb2 = emb2.detach().cpu().numpy()
+            
+        cosine_similarity = np.matmul(emb2, emb1.T)
+        confidence_score = (cosine_similarity + 1) / 2
+        return confidence_score.max()
+
+    def enhanced_similarity(self, emb1, emb2, test=False):
+        
+        embs1_processed = preprocess_embeddings(emb1)
+        embs2_processed = preprocess_embeddings(emb2)
+        if test:
+            print("Enhanced Similarity Cosine:", enhance_similarity_scores(embs1_processed, embs2_processed))
+            print("Enhanced Similarity Gaussian:", enhance_similarity_scores(embs1_processed, embs2_processed, method="gaussian"))
+            print("Enhanced Similarity Angular:", enhance_similarity_scores(embs1_processed, embs2_processed, method="angular"))
+            print("Enhanced Similarity Combined:", enhance_similarity_scores(embs1_processed, embs2_processed, method="combined"))
+
+        if not test:
+            cosine_sim = enhance_similarity_scores(embs1_processed, embs2_processed)
+            gausian_sim = enhance_similarity_scores(embs1_processed, embs2_processed, method="gaussian")
+            angular_sim = enhance_similarity_scores(embs1_processed, embs2_processed, method="angular")
+            combined_sim = enhance_similarity_scores(embs1_processed, embs2_processed, method="combined")
+        
+        
+        return cosine_sim, gausian_sim, angular_sim, combined_sim
+
+
+class EnhancedSimilarityMatcher(tf.keras.Model):
+    
+    def __init__(self, positive_embeddings, negative_embeddings=None, noise_levels=None):
+        super().__init__()
+        
+        self.positive_embeddings:tf.Tensor = tf.constant([emb.squeeze().cpu().numpy() for emb in positive_embeddings])
+        self.negative_embeddings:tf.Tensor = tf.constant([emb.squeeze().cpu().numpy() for emb in negative_embeddings])
+        self.noise_levels = tf.constant(noise_levels) if noise_levels else None
+        
+        # Calculate statistics from positive examples
+        self.positive_centroid = tf.reduce_mean(self.positive_embeddings,axis=0)
+        self.positive_std = tf.math.reduce_std(self.positive_embeddings, axis=0)
+        
+        if self.negative_embeddings is not None:
+            self.negative_embeddings = tf.reduce_mean(self.negative_embeddings, axis=0)
+            self._calculate_decision_boundary()
+            
+            
+    def call(self, query_embedding, noise_level):
+        check, similarity, metrics = self.is_wake_word(query_embedding, noise_level)
+        return check, similarity, metrics
+    
+    def _calculate_decision_boundary(self):
+        """Calculate optimal decision threshold based on positive and negative examples"""
+        # Get similarity scores for positive examples
+        pos_sims = self._batch_cosine_similarity(self.positive_embeddings, self.positive_centroid)
+        
+        # Properly handle negative embeddings
+        if hasattr(self, 'negative_embeddings') and self.negative_embeddings is not None:
+            if isinstance(self.negative_embeddings, tf.Tensor) and len(tf.shape(self.negative_embeddings)) > 1:
+                neg_sims = self._batch_cosine_similarity(self.negative_embeddings, self.positive_centroid)
+            else:
+                # Handle case where negative_embeddings is a single vector
+                neg_sims = cosine_similarity(self.negative_embeddings, self.positive_centroid)
+                neg_sims = tf.reshape(neg_sims, [-1])
+        else:
+            neg_sims = tf.constant([], dtype=tf.float32)
+        
+        # Combine and sort similarities
+        all_sims = tf.concat([pos_sims, neg_sims], axis=0)
+        all_sims = tf.sort(all_sims)
+        
+        # Find best threshold
+        best_threshold = tf.constant(0.0, dtype=tf.float32)
+        best_separation = tf.constant(-float('inf'), dtype=tf.float32)
+        
+        # Use TensorFlow while loop for threshold search
+        def condition(i, best_threshold, best_separation):
+            return i < tf.shape(all_sims)[0]
+        
+        def body(i, best_threshold, best_separation):
+            threshold = all_sims[i]
+            pos_correct = tf.reduce_mean(tf.cast(pos_sims >= threshold, tf.float32))
+            neg_correct = tf.reduce_mean(tf.cast(neg_sims < threshold, tf.float32))
+            separation = pos_correct + neg_correct - 1.0
+            
+            new_best_threshold = tf.cond(
+                separation > best_separation,
+                lambda: threshold,
+                lambda: best_threshold
+            )
+            
+            new_best_separation = tf.maximum(separation, best_separation)
+            
+            return i + 1, new_best_threshold, new_best_separation
+        
+        # Initial values
+        i = tf.constant(0)
+        
+        # Run the loop
+        _, threshold, _ = tf.while_loop(
+            condition, 
+            body, 
+            [i, best_threshold, best_separation]
+        )
+        
+        self.decision_threshold = threshold
+        
+    def _batch_cosine_similarity(self, embeddings:tf.Tensor, reference:tf.Tensor):
+        """
+        Compute cosine similarity between batches of embeddings and a reference
+        Handles different input dimensions appropriately
+        """
+        # Handle potential 3D inputs
+        if len(tf.shape(embeddings)) == 3:
+            embeddings = tf.squeeze(embeddings)
+        
+        # Ensure reference has proper shape
+        if len(tf.shape(reference)) == 1:
+            reference = tf.reshape(reference, [1, -1])
+        
+        # Handle case where embeddings is a single vector (not a batch)
+        if len(tf.shape(embeddings)) == 1:
+            embeddings = tf.expand_dims(embeddings, 0)
+            sim = cosine_similarity(embeddings, reference, axis=0)
+            return sim
+        
+        # Normal batch case
+        sim = cosine_similarity(embeddings, reference, axis=1)
+        
+        # Reshape if needed
+        if len(tf.shape(sim)) > 1:
+            output = tf.reshape(sim, [tf.shape(sim)[0], -1])
+        else:
+            output = sim
+            
+        return output
+    
+    def _adaptive_gaussian_kernel_tf(self, distance, noise_level=0.0):
+        base_sigma = 0.4
+        max_sigma = 0.6
+        adaptive_sigma = base_sigma + (max_sigma - base_sigma) * noise_level
+        # Gaussian PDF
+        pi = tf.constant(3.14159265358979323846)
+        coeff = 1.0 / (adaptive_sigma * tf.sqrt(2.0 * pi))
+        exponent = -0.5 * tf.square(distance / adaptive_sigma)
+        return coeff * tf.exp(exponent)
+
+    def compute_enhanced_similarity(self, query_embedding, noise_level=0):
+        """Compute enhanced similarity score using multiple metrics"""
+        
+        # Ensure query_embedding is the right shape
+        query_embedding = tf.squeeze(query_embedding)
+        
+        # 1. Cosine similarity with positive centroid
+        cosine_sim = cosine_similarity(
+            tf.reshape(query_embedding, [1, -1]), 
+            tf.reshape(self.positive_centroid, [1, -1])
+        )[0]
+        
+        # 2. Average similarity to positive examples
+        pos_similarities = self._batch_cosine_similarity(self.positive_embeddings, query_embedding)
+        avg_pos_sim = tf.reduce_mean(pos_similarities)
+        
+        # 3. Distance from negative samples (if available)
+        negative_penalty = tf.constant(0.0)
+        if self.negative_embeddings is not None:
+            neg_sims = self._batch_cosine_similarity(self.negative_embeddings, query_embedding)
+            negative_penalty = tf.reduce_mean(neg_sims)
+        
+        # 4. Gaussian kernel similarity with adaptive sigma
+        embedding_distance = tf.norm(query_embedding - self.positive_centroid)
+        gaussian_sim = self._adaptive_gaussian_kernel_tf(embedding_distance, noise_level)
+        
+        # 5. Standard deviation check (penalize outliers)
+        std_penalty = tf.reduce_mean(
+            tf.cast(tf.abs(query_embedding - self.positive_centroid) > 2 * self.positive_std, tf.float32)
+        )
+        
+        # Define weights
+        weights = {
+            'cosine': tf.constant(0.45, dtype=tf.float32),
+            'avg_pos': tf.constant(0.35, dtype=tf.float32),
+            'gaussian': tf.constant(0.15, dtype=tf.float32),
+            'negative': tf.constant(0.20, dtype=tf.float32),
+            'std': tf.constant(0.05, dtype=tf.float32)
+        }
+
+        # Adjust the noise level handling
+        # noise_level_tensor = tf.constant(noise_level, dtype=tf.float32)
+        # Don't convert noise_level to a tensor if it's already a tensor
+        if not isinstance(noise_level, tf.Tensor):
+            noise_level_tensor = tf.constant(noise_level, dtype=tf.float32)
+        else:
+            noise_level_tensor = noise_level
+        
+        noise_level_condition = tf.greater(noise_level_tensor, 0.3)
+        
+        gaussian_weight = tf.cond(
+            noise_level_condition,
+            lambda: weights['gaussian'] + 0.05,
+            lambda: weights['gaussian']
+        )
+        
+        cosine_weight = tf.cond(
+            noise_level_condition,
+            lambda: weights['cosine'] - 0.02,
+            lambda: weights['cosine']
+        )
+        
+        avg_pos_weight = tf.cond(
+            noise_level_condition,
+            lambda: weights['avg_pos'] - 0.01,
+            lambda: weights['avg_pos']
+        )
+        
+        std_weight = tf.cond(
+            noise_level_condition,
+            lambda: weights['std'] - 0.01,
+            lambda: weights['std']
+        )
+
+        # Modify the faint voice detection logic
+        cosine_lower_bound = tf.constant(0.08, dtype=tf.float32)
+        cosine_upper_bound = tf.constant(0.25, dtype=tf.float32)
+        cosine_middle_bound = tf.constant(0.12, dtype=tf.float32)
+        cosine_ratio = tf.constant(0.85, dtype=tf.float32)
+        
+        faint_voice_condition = tf.logical_and(
+            tf.greater(cosine_sim, cosine_lower_bound),
+            tf.less(cosine_sim, cosine_upper_bound)
+        )
+        
+        std_weight_adjusted = tf.cond(
+            faint_voice_condition,
+            lambda: std_weight * 0.7,
+            lambda: std_weight
+        )
+        
+        boost_condition = tf.logical_and(
+            tf.greater(avg_pos_sim, cosine_ratio * cosine_sim),
+            tf.greater(cosine_sim, cosine_middle_bound)
+        )
+        
+        boost = tf.cond(
+            tf.logical_and(faint_voice_condition, boost_condition),
+            lambda: tf.constant(0.03, dtype=tf.float32),
+            lambda: tf.constant(0.0, dtype=tf.float32)
+        )
+
+        # Calculate final score
+        final_score = (
+            cosine_weight * cosine_sim +
+            avg_pos_weight * avg_pos_sim +
+            gaussian_weight * gaussian_sim -
+            weights['negative'] * negative_penalty -
+            std_weight_adjusted * std_penalty + 
+            boost
+        )
+        
+        # Normalize score to [0, 1] range
+        final_score = (final_score + 1) / 2
+        
+        # Calculate individual metric scores for detailed analysis
+        metrics = {
+            'cosine_sim': cosine_sim,
+            'avg_pos_sim': avg_pos_sim,
+            'gaussian_sim': gaussian_sim,
+            'negative_penalty': negative_penalty,
+            'std_penalty': std_penalty
+        }
+        
+        # Ensure score is between 0 and 1
+        final_score = tf.clip_by_value(final_score, 0, 1)
+        
+        return final_score, metrics
+
+    def is_wake_word(self, query_embedding, noise_level=0, threshold=None):
+        """Determine if the query embedding represents the wake word"""
+        similarity, metrics = self.compute_enhanced_similarity(query_embedding, noise_level)
+        
+        if threshold is None:
+            threshold = tf.constant(0.61, dtype=tf.float32)
+        else:
+            threshold = tf.constant(threshold, dtype=tf.float32)
+        
+        return tf.greater(similarity, threshold), similarity, metrics
+
+    def estimate_noise_level(self, audio):
+        """Estimate noise level in audio signal"""
+        signal_power = tf.reduce_mean(tf.square(audio))
+        peak_power = tf.reduce_max(tf.square(audio))
+        
+        # Avoid division by zero
+        peak_power_safe = tf.maximum(peak_power, 1e-10)
+        
+        # Calculate SNR and noise level
+        snr = 10 * tf.math.log(peak_power_safe / signal_power) / tf.math.log(tf.constant(10.0))
+        
+        # Apply sigmoid function to map SNR to noise level
+        noise_level = 1 / (1 + tf.exp(0.1 * (snr - 10)))
+        
+        # Clip values to range [0, 1]
+        return tf.clip_by_value(noise_level, 0, 1)
+
+def make_reference(model, name, audio):
+    
+    import json
+    embeddings = model(audio)
+    
+    d = {"name": name, "embeddings": embeddings.tolist()}
+    
+    with open("path_to_reference.json", 'w') as f:
+        s = json.dumps(d)
+        f.write(s)
+
+
+def tabulate(headers, results):
+    """
+    Prints a formatted table without using external libraries.
+    
+    :param headers: List of column headers
+    :param results: List of row data
+    """
+    col_widths = [max(len(str(item)) for item in col) for col in zip(headers, *results)]
+    
+    def format_row(row):
+        return " | ".join(f"{str(item):<{col_widths[i]}}" for i, item in enumerate(row))
+    
+    print(f"\n{Fore.CYAN}=== Test Results ==={Style.RESET_ALL}")
+    print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
+    print(format_row(headers))
+    print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
+    for row in results:
+        print(format_row(row))
+    print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
+
+# 1. First, make sure your model has proper input/output signatures
+def prepare_model_for_export(model):
+    """Prepare the model for TFLite conversion by providing concrete input shapes"""
+    
+    # Define the concrete input shape for your model
+    # Assuming the input is an embedding vector of size 512 (adjust as needed)
+    embedding_dimension = 2048  # Change this to match your embedding dimension
+    
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=[1, embedding_dimension], dtype=tf.float32),  # Query embedding shape
+        tf.TensorSpec(shape=[], dtype=tf.float32)  # Noise level (scalar)
+    ])
+    def serving_function(query_embedding, noise_level):
+        # Call is_wake_word with fixed threshold
+        is_wake, similarity, metrics = model.is_wake_word(query_embedding, noise_level)
+        
+        # Return what you need in your Android app
+        return {
+            'is_wake_word': is_wake,
+            'similarity_score': similarity
+        }
+    
+    # Save the signatures
+    model.serving_function = serving_function
+    return model
+
+# 2. Convert the model to TFLite
+def convert_to_tflite(model, output_path="enhanced_similarity_matcher.tflite"):
+    """Convert the TensorFlow model to TFLite format"""
+    
+    # Prepare model
+    model = prepare_model_for_export(model)
+    
+    # Get concrete function
+    concrete_func = model.serving_function.get_concrete_function()
+    
+    # Convert the model
+    converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_func])
+    
+    # Optimization settings (optional)
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.target_spec.supported_types = [tf.float16]  # Use FP16 quantization
+    
+    # Convert the model
+    tflite_model = converter.convert()
+    
+    # Save the model to file
+    with open(output_path, 'wb') as f:
+        f.write(tflite_model)
+    
+    print(f"Model successfully converted and saved to {output_path}")
+    return output_path
+
+# Example usage:
+# matcher = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings)
+# tflite_path = convert_to_tflite(matcher)
+
+
+
+if __name__ == "__main__":
+    
+    model = ONNXtoTorchModel("./resnet_50_arc/slim_93%_accuracy_72.7390%.onnx")
+    
+    base_dir = "./"
+    
+    dir_list = os.listdir(os.path.join(base_dir, "wake_word_data", "recordings"))
+    
+    positive_files = [
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-AU-jimm.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-AU-kylie.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-IN-aarav.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-IN-alia.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-UK-ruby.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-UK-theo.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-US-natalie.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-US-zion.mp3"),
+        # os.path.join(base_dir, "tts_samples", "negative", f"Aira1.mp3"),
+        # os.path.join(base_dir, "tts_samples", "negative", f"Aira0.mp3"),
+    ]
+
+    negative_files = [
+        os.path.join(base_dir, "tts_samples", "negative", "Hello0.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Hello1.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-natalie.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-natalie.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-natalie.mp3"),
+    ]
+    
+
+        
+    # Process positive examples
+    print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
+    positive_embeddings = []
+    for file in positive_files:
+        
+        audio, sr = librosa.load(file, sr=16000)
+        # Ensure audio is exactly 24000 samples long
+        expected_length = 24000
+        if len(audio) < expected_length:
+            pad_length = expected_length - len(audio)
+            audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+        
+        emb = model(audio)
+        positive_embeddings.append(emb)
+    
+    # Process negative examples
+    print(f"{Fore.RED}Processing negative examples...{Style.RESET_ALL}")
+    negative_embeddings = []
+    for file in negative_files:
+        
+        audio, sr = librosa.load(file, sr=16000)
+        # Ensure audio is exactly 24000 samples long
+        expected_length = 24000
+        if len(audio) < expected_length:
+            pad_length = expected_length - len(audio)
+            audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+        
+        emb = model(audio)
+        negative_embeddings.append(emb)
+    
+    # Initialize matcher
+    matcher = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings)
+    
+    print(matcher)    
+    
+    file_path = r"C:\Users\Rohit Francis\Documents\GitHub\EfficientWordNet_Upgrade\tts_samples\positive\Nobita_en-AU-jimm.mp3"
+    # Load and resample to 16 kHz
+    audio, sr = librosa.load(file_path, sr=16000)
+    # Ensure audio is exactly 24000 samples long
+    expected_length = 24000
+    if len(audio) < expected_length:
+        pad_length = expected_length - len(audio)
+        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+
+    print("Audio processing: ", audio.shape, sr)
+    embeddings_audio = model(audio)
+    print("Embeddings from audio shape:", embeddings_audio.shape)
+    # noise_level = matcher.estimate_noise_level(tf.constant(audio))
+    check, similarity, metrics = matcher.call(embeddings_audio, 0.0)
+
+    print(check)
+    print(similarity)
+    print(metrics)
+    
+    tflite_path = convert_to_tflite(matcher)
+    print(f"Model successfully converted and saved to {tflite_path}")
+    
+    # Load and test TFLite model
+    interpreter = tf.lite.Interpreter(model_path=tflite_path)
+    interpreter.allocate_tensors()
+    
+    # Get input and output tensors
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    
+    # Set input tensor
+    interpreter.set_tensor(input_details[0]['index'], 
+                           tf.reshape(embeddings_audio, [1, -1]).numpy())
+    interpreter.set_tensor(input_details[1]['index'], 
+                           np.array(0.0, dtype=np.float32))
+    
+    # Run inference
+    interpreter.invoke()
+    
+    # Get output tensor
+    tflite_is_wake = interpreter.get_tensor(output_details[0]['index'])
+    tflite_score = interpreter.get_tensor(output_details[1]['index'])
+    
+    print(f"TFLite model output - Is wake word: {tflite_is_wake}, Score: {tflite_score}")
+    
 # import pyttsx3
 # import time
 # engine = pyttsx3.init()  # Initialize the TTS engine
@@ -401,36 +1026,36 @@
 
 
 # Test code
-import json
-import librosa
-from colorama import Fore, Style
-from Detection import ONNXtoTorchModel
-import os
-import numpy as np
+# import json
+# import librosa
+# from colorama import Fore, Style
+# from Detection import ONNXtoTorchModel
+# import os
+# import numpy as np
 
-word = "SnehaAIGen"
-negative_word = "none" 
+# word = "SnehaAIGen"
+# negative_word = "none" 
 
-base_dir = "./"
+# base_dir = "./"
 
-model_path = os.path.join(base_dir, "resnet_50_arc", "slim_93%_accuracy_72.7390%.onnx")
-model = ONNXtoTorchModel(model_path)
+# model_path = os.path.join(base_dir, "resnet_50_arc", "slim_93%_accuracy_72.7390%.onnx")
+# model = ONNXtoTorchModel(model_path)
 
 
-positive_files = [
-    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-AU-jimm.mp3"),
-    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-AU-kylie.mp3"),
-    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-IN-aarav.mp3"),
-    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-IN-alia.mp3"),
-    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-UK-ruby.mp3"),
-    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-UK-theo.mp3"),
-    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-US-natalie.mp3"),
-    os.path.join(base_dir, r"tts_samples\positive\Sneha_en-US-zion.mp3"),
-    os.path.join(base_dir, "wake_word_data", "recordings", "normal", f"Sneha_normal_1.wav"),
-    os.path.join(base_dir, "wake_word_data", "recordings", "normal", f"Sneha_normal_2.wav"),
-    # os.path.join(base_dir, "tts_samples", "negative", f"Aira1.mp3"),
-    # os.path.join(base_dir, "tts_samples", "negative", f"Aira0.mp3"),
-]
+# positive_files = [
+#     os.path.join(base_dir, r"tts_samples\positive\Sneha_en-AU-jimm.mp3"),
+#     os.path.join(base_dir, r"tts_samples\positive\Sneha_en-AU-kylie.mp3"),
+#     os.path.join(base_dir, r"tts_samples\positive\Sneha_en-IN-aarav.mp3"),
+#     os.path.join(base_dir, r"tts_samples\positive\Sneha_en-IN-alia.mp3"),
+#     os.path.join(base_dir, r"tts_samples\positive\Sneha_en-UK-ruby.mp3"),
+#     os.path.join(base_dir, r"tts_samples\positive\Sneha_en-UK-theo.mp3"),
+#     os.path.join(base_dir, r"tts_samples\positive\Sneha_en-US-natalie.mp3"),
+#     os.path.join(base_dir, r"tts_samples\positive\Sneha_en-US-zion.mp3"),
+#     os.path.join(base_dir, "wake_word_data", "recordings", "normal", f"Sneha_normal_1.wav"),
+#     os.path.join(base_dir, "wake_word_data", "recordings", "normal", f"Sneha_normal_2.wav"),
+#     # os.path.join(base_dir, "tts_samples", "negative", f"Aira1.mp3"),
+#     # os.path.join(base_dir, "tts_samples", "negative", f"Aira0.mp3"),
+# ]
 
 
 # positive_files = [
@@ -475,22 +1100,22 @@ positive_files = [
 #         os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Jeeva_normal_1.wav"),
 #     ]
 
-negative_files = [
-        # os.path.join(base_dir, "tts_samples", "negative", "Hello0.mp3"),
-        # os.path.join(base_dir, "tts_samples", "negative", "Hello1.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-aarav.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-alia.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-zion.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-natalie.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-aarav.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-alia.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-zion.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-natalie.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-alia.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-aarav.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-zion.mp3"),
-        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-natalie.mp3"),
-    ]
+# negative_files = [
+#         # os.path.join(base_dir, "tts_samples", "negative", "Hello0.mp3"),
+#         # os.path.join(base_dir, "tts_samples", "negative", "Hello1.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-aarav.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-alia.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-zion.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-natalie.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-aarav.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-alia.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-zion.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-natalie.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-alia.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-aarav.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-zion.mp3"),
+#         os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-natalie.mp3"),
+#     ]
 # Old negative reference
 # negative_files = [
 #         os.path.join(base_dir, "wake_word_data", "recordings", "normal", "Hello_normal_1.wav"),
@@ -502,46 +1127,46 @@ negative_files = [
 #     ]
     
 # Process positive examples
-print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
-positive_embeddings = []
-for file in positive_files:
+# print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
+# positive_embeddings = []
+# for file in positive_files:
     
-    audio, sr = librosa.load(file, sr=16000)
-    # Ensure audio is exactly 24000 samples long
-    expected_length = 24000
-    if len(audio) < expected_length:
-        pad_length = expected_length - len(audio)
-        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+#     audio, sr = librosa.load(file, sr=16000)
+#     # Ensure audio is exactly 24000 samples long
+#     expected_length = 24000
+#     if len(audio) < expected_length:
+#         pad_length = expected_length - len(audio)
+#         audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
     
-    emb = model(audio)
-    positive_embeddings.append(emb.detach().tolist()[0])
+#     emb = model(audio)
+#     positive_embeddings.append(emb.detach().tolist()[0])
 
-# Process negative examples
-print(f"{Fore.RED}Processing negative examples...{Style.RESET_ALL}")
-negative_embeddings = []
-for file in negative_files:
+# # Process negative examples
+# print(f"{Fore.RED}Processing negative examples...{Style.RESET_ALL}")
+# negative_embeddings = []
+# for file in negative_files:
     
-    audio, sr = librosa.load(file, sr=16000)
-    # Ensure audio is exactly 24000 samples long
-    expected_length = 24000
-    if len(audio) < expected_length:
-        pad_length = expected_length - len(audio)
-        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+#     audio, sr = librosa.load(file, sr=16000)
+#     # Ensure audio is exactly 24000 samples long
+#     expected_length = 24000
+#     if len(audio) < expected_length:
+#         pad_length = expected_length - len(audio)
+#         audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
     
-    emb = model(audio)
-    negative_embeddings.append(emb.detach().tolist()[0])
+#     emb = model(audio)
+#     negative_embeddings.append(emb.detach().tolist()[0])
 
 
-# print(positive_embeddings[0])
+# # print(positive_embeddings[0])
 
-data = {"positive_embeddings":positive_embeddings, 
-        "negative_embeddings": negative_embeddings}
+# data = {"positive_embeddings":positive_embeddings, 
+#         "negative_embeddings": negative_embeddings}
 
-with open(f"{word}_{negative_word}_ref.json", "w") as f:
-    s = json.dumps(data)
-    f.write(s)
+# with open(f"{word}_{negative_word}_ref.json", "w") as f:
+#     s = json.dumps(data)
+#     f.write(s)
 
-print(f"saved {word}_{negative_word}_ref.json")
+# print(f"saved {word}_{negative_word}_ref.json")
 # {
 #     "positive_embeddings": [
 #         [0.02489, 0.0471, ...],
