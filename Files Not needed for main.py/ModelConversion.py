@@ -1,18 +1,11 @@
-import os
-import numpy as np
-import librosa
-import torch
-import torch.nn as nn
-import onnxruntime
-import numpy as np
-from python_speech_features import logfbank
-import librosa
-from UTILS import enhance_similarity_scores, preprocess_embeddings
-# from sklearn.metrics.pairwise import cosine_simsilarity
-from scipy.stats import norm
-from colorama import Fore, Style
 import tensorflow as tf
+import numpy as np
+import tf2onnx
+import onnx
+import os
+from Detection import ONNXtoTorchModel
 
+# First recreate the cosine_similarity function from your code
 def cosine_similarity(a, b, axis=1, eps=1e-8):
     """
     Compute cosine similarity between tensors a and b along specified axis
@@ -36,160 +29,25 @@ def cosine_similarity(a, b, axis=1, eps=1e-8):
     # Ensure output has appropriate dimensions
     return tf.reduce_sum(a_norm * b_norm, axis=axis)
 
-
-class ONNXtoTorchModel(nn.Module):
-    def __init__(self, onnx_path):
-        super().__init__()
-        # Load ONNX model
-        self.session = onnxruntime.InferenceSession(onnx_path)
-        self.input_name = self.session.get_inputs()[0].name
-        self.output_name = self.session.get_outputs()[0].name
-        self.window_length = 1.5
-        self.window_frames = int(self.window_length * 16000)
-        
-    def compute_logfbank_features(self, inpAudio):
-        """
-        Compute log Mel-filterbank features
-        """
-        return logfbank(
-            inpAudio,
-            samplerate=16000,
-            winlen=0.025,
-            winstep=0.01,
-            nfilt=64,
-            nfft=512,
-            preemph=0.0
-        )
-    
-    def get_embeddings(self, audio):
-        """
-        Convert audio to embeddings
-        Args:
-            audio: numpy array of shape (window_frames,) - 1.5 seconds of audio at 16kHz
-        Returns:
-            embeddings: torch tensor of embeddings
-        """
-        assert audio.shape == (self.window_frames,), f"Expected audio shape {self.window_frames}, got {audio.shape}"
-        
-        # Compute log mel features
-        features = self.compute_logfbank_features(audio)
-        
-        # Add batch and channel dimensions
-        features = np.expand_dims(features, axis=(0,1))
-        features = np.float32(features)
-        
-        # Get embeddings from ONNX model
-        outputs = self.session.run(
-            [self.output_name],
-            {self.input_name: features}
-        )[0]
-        
-        return torch.from_numpy(outputs)
-    
-    def forward(self, x):
-        """
-        Forward pass - handles both audio and pre-computed mel spectrograms
-        Args:
-            x: Either audio waveform or mel spectrogram
-        Returns:
-            embeddings: torch tensor of embeddings
-        """
-        if isinstance(x, torch.Tensor):
-            x = x.detach().cpu().numpy()
-            
-        if len(x.shape) == 1:  # Audio waveform
-            return self.get_embeddings(x)
-        else:  # Mel spectrogram
-            # Add batch and channel dimensions if needed
-            if len(x.shape) == 2:
-                x = np.expand_dims(x, axis=(0,1))
-            x = np.float32(x)
-            outputs = self.session.run([self.output_name], {self.input_name: x})[0]
-            return torch.from_numpy(outputs)
-        
-    def compute_similarity(self, emb1, emb2):
-        """
-        Compute similarity between two embeddings using cosine similarity
-        """
-        if isinstance(emb1, torch.Tensor):
-            emb1 = emb1.detach().cpu().numpy()
-        if isinstance(emb2, torch.Tensor):
-            emb2 = emb2.detach().cpu().numpy()
-            
-        cosine_similarity = np.matmul(emb2, emb1.T)
-        confidence_score = (cosine_similarity + 1) / 2
-        return confidence_score.max()
-
-    def enhanced_similarity(self, emb1, emb2, test=False):
-        
-        embs1_processed = preprocess_embeddings(emb1)
-        embs2_processed = preprocess_embeddings(emb2)
-        if test:
-            print("Enhanced Similarity Cosine:", enhance_similarity_scores(embs1_processed, embs2_processed))
-            print("Enhanced Similarity Gaussian:", enhance_similarity_scores(embs1_processed, embs2_processed, method="gaussian"))
-            print("Enhanced Similarity Angular:", enhance_similarity_scores(embs1_processed, embs2_processed, method="angular"))
-            print("Enhanced Similarity Combined:", enhance_similarity_scores(embs1_processed, embs2_processed, method="combined"))
-
-        if not test:
-            cosine_sim = enhance_similarity_scores(embs1_processed, embs2_processed)
-            gausian_sim = enhance_similarity_scores(embs1_processed, embs2_processed, method="gaussian")
-            angular_sim = enhance_similarity_scores(embs1_processed, embs2_processed, method="angular")
-            combined_sim = enhance_similarity_scores(embs1_processed, embs2_processed, method="combined")
-        
-        
-        return cosine_sim, gausian_sim, angular_sim, combined_sim
-
-
-def make_reference(model, name, audio):
-    
-    import json
-    embeddings = model(audio)
-    
-    d = {"name": name, "embeddings": embeddings.tolist()}
-    
-    with open("path_to_reference.json", 'w') as f:
-        s = json.dumps(d)
-        f.write(s)
-
-
-def tabulate(headers, results):
-    """
-    Prints a formatted table without using external libraries.
-    
-    :param headers: List of column headers
-    :param results: List of row data
-    """
-    col_widths = [max(len(str(item)) for item in col) for col in zip(headers, *results)]
-    
-    def format_row(row):
-        return " | ".join(f"{str(item):<{col_widths[i]}}" for i, item in enumerate(row))
-    
-    print(f"\n{Fore.CYAN}=== Test Results ==={Style.RESET_ALL}")
-    print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
-    print(format_row(headers))
-    print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
-    for row in results:
-        print(format_row(row))
-    print("-" * (sum(col_widths) + 3 * (len(headers) - 1)))
-
-
+# Recreate the EnhancedSimilarityMatcher class
 class EnhancedSimilarityMatcher(tf.keras.Model):
-    
     def __init__(self, positive_embeddings, negative_embeddings=None, noise_levels=None):
         super().__init__()
         
-        self.positive_embeddings:tf.Tensor = tf.constant([emb.squeeze().cpu().numpy() for emb in positive_embeddings])
-        self.negative_embeddings:tf.Tensor = tf.constant([emb.squeeze().cpu().numpy() for emb in negative_embeddings])
+        self.positive_embeddings = tf.constant(positive_embeddings)
+        self.negative_embeddings = tf.constant(negative_embeddings) if negative_embeddings is not None else None
         self.noise_levels = tf.constant(noise_levels) if noise_levels else None
         
         # Calculate statistics from positive examples
-        self.positive_centroid = tf.reduce_mean(self.positive_embeddings,axis=0)
+        self.positive_centroid = tf.reduce_mean(self.positive_embeddings, axis=0)
         self.positive_std = tf.math.reduce_std(self.positive_embeddings, axis=0)
         
         if self.negative_embeddings is not None:
-            self.negative_embeddings = tf.reduce_mean(self.negative_embeddings, axis=0)
+            if len(tf.shape(self.negative_embeddings)) > 1:
+                self.negative_centroid = tf.reduce_mean(self.negative_embeddings, axis=0)
+            else:
+                self.negative_centroid = self.negative_embeddings
             self._calculate_decision_boundary()
-            
             
     def call(self, query_embedding, noise_level):
         check, similarity, metrics = self.is_wake_word(query_embedding, noise_level)
@@ -251,7 +109,7 @@ class EnhancedSimilarityMatcher(tf.keras.Model):
         
         self.decision_threshold = threshold
         
-    def _batch_cosine_similarity(self, embeddings:tf.Tensor, reference:tf.Tensor):
+    def _batch_cosine_similarity(self, embeddings, reference):
         """
         Compute cosine similarity between batches of embeddings and a reference
         Handles different input dimensions appropriately
@@ -332,8 +190,6 @@ class EnhancedSimilarityMatcher(tf.keras.Model):
         }
 
         # Adjust the noise level handling
-        # noise_level_tensor = tf.constant(noise_level, dtype=tf.float32)
-        # Don't convert noise_level to a tensor if it's already a tensor
         if not isinstance(noise_level, tf.Tensor):
             noise_level_tensor = tf.constant(noise_level, dtype=tf.float32)
         else:
@@ -448,61 +304,171 @@ class EnhancedSimilarityMatcher(tf.keras.Model):
         # Clip values to range [0, 1]
         return tf.clip_by_value(noise_level, 0, 1)
 
-# Example usage:
+
+def convert_model_to_onnx():
+    # Create sample data for model initialization
+    # Assuming embeddings are 128-dimensional vectors
+    embedding_dim = 128
+    
+    import librosa
+    from colorama import Fore, Style
+    
+    base_dir = "./"
+    
+    model_path = os.path.join(base_dir, "resnet_50_arc", "slim_93%_accuracy_72.7390%.onnx")
+    model = ONNXtoTorchModel(model_path)
+    
+    
+    dir_list = os.listdir(os.path.join(base_dir, "wake_word_data", "recordings"))
+    
+    positive_files = [
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-AU-jimm.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-AU-kylie.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-IN-aarav.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-IN-alia.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-UK-ruby.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-UK-theo.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-US-natalie.mp3"),
+        os.path.join(base_dir, r"tts_samples\positive\Nobita_en-US-zion.mp3"),
+        # os.path.join(base_dir, "tts_samples", "negative", f"Aira1.mp3"),
+        # os.path.join(base_dir, "tts_samples", "negative", f"Aira0.mp3"),
+    ]
+    
+    negative_files = [
+        os.path.join(base_dir, "tts_samples", "negative", "Hello0.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Hello1.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Thunderbolt_en-US-natalie.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Xylophone_en-US-natalie.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-alia.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-IN-aarav.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-zion.mp3"),
+        os.path.join(base_dir, "tts_samples", "negative", "Quasar_en-US-natalie.mp3"),
+    ]
+        
+    # Process positive examples
+    print(f"{Fore.GREEN}Processing positive examples...{Style.RESET_ALL}")
+    positive_embeddings = []
+    for file in positive_files:
+        
+        audio, sr = librosa.load(file, sr=16000)
+        # Ensure audio is exactly 24000 samples long
+        expected_length = 24000
+        if len(audio) < expected_length:
+            pad_length = expected_length - len(audio)
+            audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+        
+        emb = model(audio)
+        positive_embeddings.append(emb)
+    
+    # Process negative examples
+    print(f"{Fore.RED}Processing negative examples...{Style.RESET_ALL}")
+    negative_embeddings = []
+    for file in negative_files:
+        
+        audio, sr = librosa.load(file, sr=16000)
+        # Ensure audio is exactly 24000 samples long
+        expected_length = 24000
+        if len(audio) < expected_length:
+            pad_length = expected_length - len(audio)
+            audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
+        
+        emb = model(audio)
+        negative_embeddings.append(emb)
+    
+    # Initialize matcher
+    matcher = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings)
+    
+    # Create sample positive embeddings (5 examples)
+    positive_embeddings = np.random.rand(5, embedding_dim).astype(np.float32)
+    
+    # Create sample negative embeddings (3 examples)
+    negative_embeddings = np.random.rand(3, embedding_dim).astype(np.float32)
+    
+    # Create and initialize the model
+    model = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings)
+    
+    # Define input signature for the model's call method
+    # This specifies the shape and type of inputs the model expects
+    input_signature = [
+        tf.TensorSpec(shape=[None, embedding_dim], dtype=tf.float32, name="query_embedding"),
+        tf.TensorSpec(shape=[], dtype=tf.float32, name="noise_level")
+    ]
+    
+    # Create a concrete function from the model's call method using the input signature
+    concrete_func = tf.function(model.call).get_concrete_function(*input_signature)
+    
+    # Define output path for ONNX model
+    output_path = "similarity_matcher.onnx"
+    
+    # Convert the model to ONNX format
+    model_proto, _ = tf2onnx.convert.from_function(
+        concrete_func,
+        input_signature=input_signature,
+        opset=13,  # ONNX opset version (choose based on your target deployment environment)
+        output_path=output_path
+    )
+    
+    print(f"Model converted and saved to {output_path}")
+    
+    # Additional conversion functions for specific methods if needed
+    # Convert the estimate_noise_level method separately
+    noise_level_func = tf.function(model.estimate_noise_level).get_concrete_function(
+        tf.TensorSpec(shape=[None], dtype=tf.float32, name="audio")
+    )
+    
+    noise_level_path = "noise_level_estimator.onnx"
+    noise_model_proto, _ = tf2onnx.convert.from_function(
+        noise_level_func,
+        opset=13,
+        output_path=noise_level_path
+    )
+    
+    print(f"Noise estimator converted and saved to {noise_level_path}")
+    
+    # Create a version of the model that only returns the raw similarity score
+    # This can be useful for debugging or custom threshold handling
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=[None, embedding_dim], dtype=tf.float32, name="query_embedding"),
+        tf.TensorSpec(shape=[], dtype=tf.float32, name="noise_level")
+    ])
+    def get_similarity_only(query_embedding, noise_level):
+        similarity, _ = model.compute_enhanced_similarity(query_embedding, noise_level)
+        return similarity
+    
+    similarity_only_path = "similarity_score.onnx"
+    similarity_model_proto, _ = tf2onnx.convert.from_function(
+        get_similarity_only,
+        opset=13,
+        output_path=similarity_only_path
+    )
+    
+    print(f"Similarity calculator converted and saved to {similarity_only_path}")
+    
+    return output_path, noise_level_path, similarity_only_path
+
 if __name__ == "__main__":
-    model = ONNXtoTorchModel("./resnet_50_arc/slim_93%_accuracy_72.7390%.onnx")
+    # Check if TensorFlow version is compatible with tf2onnx
+    print(f"TensorFlow version: {tf.__version__}")
     
-    # file_path = "audio2.wav"
-    # # Load and resample to 16 kHz
-    # audio, sr = librosa.load(file_path, sr=16000)
-    # # Ensure audio is exactly 24000 samples long
-    # expected_length = 24000
-    # if len(audio) < expected_length:
-    #     pad_length = expected_length - len(audio)
-    #     audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
-
-    # print("Audio processing: ", audio.shape, sr)
-    
-    # make_reference(model, "bed", audio)
-    
-    # # Test with audio
-    # audio = np.random.randn(24000)  # 1.5 seconds at 16kHz
-    file_path = "audio2.wav"
-    # Load and resample to 16 kHz
-    audio, sr = librosa.load(file_path, sr=16000)
-    # Ensure audio is exactly 24000 samples long
-    expected_length = 24000
-    if len(audio) < expected_length:
-        pad_length = expected_length - len(audio)
-        audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
-
-    print("Audio processing: ", audio.shape, sr)
-    embeddings_audio = model(audio)
-    print("Embeddings from audio shape:", embeddings_audio.shape)
-    
-    # audio = np.random.randn(24000)  # 1.5 seconds at 16kHz
-    file_path2 = "audio_twin.wav"
-    # Load and resample to 16 kHz
-    audio2, sr = librosa.load(file_path2, sr=16000)
-    # Ensure audio is exactly 24000 samples long
-    expected_length = 24000
-    if len(audio2) < expected_length:
-        pad_length = expected_length - len(audio2)
-        audio2 = np.pad(audio2, (0, pad_length), mode='constant')  # Pad with zeros
-
-    print("Audio processing: ", audio2.shape, sr)
-    embeddings_audio2 = model(audio2)
-    print("Embeddings from audio2 shape:", embeddings_audio2.shape)
-    
-    # Test with mel spectrogram
-    # mel_spec = np.random.randn(149, 64)  # Example mel spectrogram shape
-    # embeddings_mel = model(mel_spec)
-    # print("Embeddings from mel spectrogram shape:", embeddings_mel.shape)
-    
-    # Test similarity computation
-    
-    print(f"Trial with audio files {file_path} and {file_path2}")
-    similarity = model.compute_similarity(embeddings_audio, embeddings_audio2)
-    print("Old Cosine Similarity score:", similarity)
-    
-    model.enhanced_similarity(embeddings_audio, embeddings_audio2)
+    try:
+        # Convert the model
+        model_path, noise_path, sim_path = convert_model_to_onnx()
+        
+        # Verify the ONNX models
+        for path in [model_path, noise_path, sim_path]:
+            try:
+                # Load and check the model
+                onnx_model = onnx.load(path)
+                onnx.checker.check_model(onnx_model)
+                print(f"ONNX model {path} verified successfully!")
+            except Exception as e:
+                print(f"Error verifying ONNX model {path}: {e}")
+        
+    except Exception as e:
+        print(f"Error during conversion: {e}")
