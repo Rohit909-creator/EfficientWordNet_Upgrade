@@ -10,13 +10,13 @@ from Detection import ONNXtoTorchModel  # Import your model class
 from Detection import EnhancedSimilarityMatcher
 import tensorflow as tf
 
-# tflite_path = "enhanced_similarity_matcher.tflite"
-# interpreter = tf.lite.Interpreter(model_path=tflite_path)
-# interpreter.allocate_tensors()
+tflite_path = "enhanced_similarity_matcher.tflite"
+interpreter = tf.lite.Interpreter(model_path=tflite_path)
+interpreter.allocate_tensors()
 
 # Get input and output tensors
-# input_details = interpreter.get_input_details()
-# output_details = interpreter.get_output_details()
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
 
 class SimpleMicStream:
@@ -116,20 +116,20 @@ class HotwordDetector:
             # Use the matcher to determine if this is a wake word
             noise_level = self.matcher.estimate_noise_level(audio_window)
             
-            is_wake_word, confidence, similarities = self.matcher.is_wake_word(current_embeddings, noise_level)
+            # is_wake_word, confidence, similarities = self.matcher.is_wake_word(current_embeddings, noise_level)
             
             # Set input tensor
-            # interpreter.set_tensor(input_details[0]['index'], 
-            #                     tf.reshape(current_embeddings, [1, -1]).numpy())
-            # interpreter.set_tensor(input_details[1]['index'], 
-            #                     np.array(noise_level, dtype=np.float32))
+            interpreter.set_tensor(input_details[0]['index'], 
+                                tf.reshape(current_embeddings, [1, -1]).numpy())
+            interpreter.set_tensor(input_details[1]['index'], 
+                                np.array(noise_level, dtype=np.float32))
             
             # # Run inference
-            # interpreter.invoke()
+            interpreter.invoke()
             
             # # Get output tensor
-            # tflite_is_wake = interpreter.get_tensor(output_details[0]['index'])
-            # tflite_score = interpreter.get_tensor(output_details[1]['index'])
+            tflite_is_wake = interpreter.get_tensor(output_details[0]['index'])
+            tflite_score = interpreter.get_tensor(output_details[1]['index'])
             
             # print(f"TFLite model output - Is wake word: {tflite_is_wake}, Score: {tflite_score}")
             
@@ -137,11 +137,18 @@ class HotwordDetector:
             self.audio_buffer = self.audio_buffer[-self.window_samples:]
             
             # Check if confidence exceeds threshold
-            if is_wake_word and confidence >= self.threshold:
+            # if is_wake_word and confidence >= self.threshold:
+            #     return {
+            #         "match": True,
+            #         "confidence": float(confidence),
+            #         "similarities": similarities
+            #     }
+            
+            if tflite_is_wake and tflite_score >= self.threshold:
                 return {
                     "match": True,
-                    "confidence": float(confidence),
-                    "similarities": similarities
+                    "confidence": float(tflite_score),
+                    "similarities": tflite_score
                 }
                 
         return {"match": False, "confidence": 0.0, "similarities": {}}

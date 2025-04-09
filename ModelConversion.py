@@ -308,10 +308,11 @@ class EnhancedSimilarityMatcher(tf.keras.Model):
 def convert_model_to_onnx():
     # Create sample data for model initialization
     # Assuming embeddings are 128-dimensional vectors
-    embedding_dim = 128
+    embedding_dim = 2048
     
     import librosa
     from colorama import Fore, Style
+    import tf2onnx
     
     base_dir = "./"
     
@@ -330,8 +331,6 @@ def convert_model_to_onnx():
         os.path.join(base_dir, r"tts_samples\positive\Nobita_en-UK-theo.mp3"),
         os.path.join(base_dir, r"tts_samples\positive\Nobita_en-US-natalie.mp3"),
         os.path.join(base_dir, r"tts_samples\positive\Nobita_en-US-zion.mp3"),
-        # os.path.join(base_dir, "tts_samples", "negative", f"Aira1.mp3"),
-        # os.path.join(base_dir, "tts_samples", "negative", f"Aira0.mp3"),
     ]
     
     negative_files = [
@@ -364,7 +363,7 @@ def convert_model_to_onnx():
             audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
         
         emb = model(audio)
-        positive_embeddings.append(emb)
+        positive_embeddings.append(emb.detach().numpy())
     
     # Process negative examples
     print(f"{Fore.RED}Processing negative examples...{Style.RESET_ALL}")
@@ -379,78 +378,100 @@ def convert_model_to_onnx():
             audio = np.pad(audio, (0, pad_length), mode='constant')  # Pad with zeros
         
         emb = model(audio)
-        negative_embeddings.append(emb)
+        negative_embeddings.append(emb.detach().numpy())
     
     # Initialize matcher
-    matcher = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings)
+    similarity_model = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings)
     
-    # Create sample positive embeddings (5 examples)
-    positive_embeddings = np.random.rand(5, embedding_dim).astype(np.float32)
-    
-    # Create sample negative embeddings (3 examples)
-    negative_embeddings = np.random.rand(3, embedding_dim).astype(np.float32)
-    
-    # Create and initialize the model
-    model = EnhancedSimilarityMatcher(positive_embeddings, negative_embeddings)
-    
-    # Define input signature for the model's call method
-    # This specifies the shape and type of inputs the model expects
-    input_signature = [
+    # Define the model call function with tf.function decorator
+    @tf.function(input_signature=[
         tf.TensorSpec(shape=[None, embedding_dim], dtype=tf.float32, name="query_embedding"),
         tf.TensorSpec(shape=[], dtype=tf.float32, name="noise_level")
-    ]
-    
-    # Create a concrete function from the model's call method using the input signature
-    concrete_func = tf.function(model.call).get_concrete_function(*input_signature)
+    ])
+    def model_call(query_embedding, noise_level):
+        return similarity_model.call(query_embedding, noise_level)
     
     # Define output path for ONNX model
     output_path = "similarity_matcher.onnx"
     
-    # Convert the model to ONNX format
+    # Convert the model call function to ONNX format
     model_proto, _ = tf2onnx.convert.from_function(
-        concrete_func,
-        input_signature=input_signature,
-        opset=13,  # ONNX opset version (choose based on your target deployment environment)
+        model_call,
+        input_signature=[
+            tf.TensorSpec(shape=[None, embedding_dim], dtype=tf.float32, name="query_embedding"),
+            tf.TensorSpec(shape=[], dtype=tf.float32, name="noise_level")
+        ],
+        opset=13,
         output_path=output_path
     )
     
     print(f"Model converted and saved to {output_path}")
     
-    # Additional conversion functions for specific methods if needed
-    # Convert the estimate_noise_level method separately
-    noise_level_func = tf.function(model.estimate_noise_level).get_concrete_function(
+    # Create wrapper function for noise level estimation
+    @tf.function(input_signature=[
         tf.TensorSpec(shape=[None], dtype=tf.float32, name="audio")
-    )
+    ])
+    def estimate_noise_wrapper(audio):
+        return similarity_model.estimate_noise_level(audio)
     
     noise_level_path = "noise_level_estimator.onnx"
     noise_model_proto, _ = tf2onnx.convert.from_function(
-        noise_level_func,
+        estimate_noise_wrapper,
+        input_signature=[tf.TensorSpec(shape=[None], dtype=tf.float32, name="audio")],
         opset=13,
         output_path=noise_level_path
     )
     
     print(f"Noise estimator converted and saved to {noise_level_path}")
     
-    # Create a version of the model that only returns the raw similarity score
-    # This can be useful for debugging or custom threshold handling
+    # Create a function for similarity score only
     @tf.function(input_signature=[
         tf.TensorSpec(shape=[None, embedding_dim], dtype=tf.float32, name="query_embedding"),
         tf.TensorSpec(shape=[], dtype=tf.float32, name="noise_level")
     ])
     def get_similarity_only(query_embedding, noise_level):
-        similarity, _ = model.compute_enhanced_similarity(query_embedding, noise_level)
+        similarity, _ = similarity_model.compute_enhanced_similarity(query_embedding, noise_level)
         return similarity
     
     similarity_only_path = "similarity_score.onnx"
     similarity_model_proto, _ = tf2onnx.convert.from_function(
         get_similarity_only,
+        input_signature=[
+            tf.TensorSpec(shape=[None, embedding_dim], dtype=tf.float32, name="query_embedding"),
+            tf.TensorSpec(shape=[], dtype=tf.float32, name="noise_level")
+        ],
         opset=13,
         output_path=similarity_only_path
     )
     
     print(f"Similarity calculator converted and saved to {similarity_only_path}")
     
-    return output_path, noise_level_path, similarity_only_path
+    # Create a function for is_wake_word prediction
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=[None, embedding_dim], dtype=tf.float32, name="query_embedding"),
+        tf.TensorSpec(shape=[], dtype=tf.float32, name="noise_level"),
+        tf.TensorSpec(shape=[], dtype=tf.float32, name="threshold")  # Removed default parameter
+    ])
+    def is_wake_word_function(query_embedding, noise_level, threshold):
+        # Use the threshold parameter directly without default
+        is_wake, similarity, _ = similarity_model.is_wake_word(query_embedding, noise_level, threshold)
+        return {"is_wake": is_wake, "similarity": similarity}
+
+    wake_word_path = "wake_word_detector.onnx"
+    wake_word_proto, _ = tf2onnx.convert.from_function(
+        is_wake_word_function,
+        input_signature=[
+            tf.TensorSpec(shape=[None, embedding_dim], dtype=tf.float32, name="query_embedding"),
+            tf.TensorSpec(shape=[], dtype=tf.float32, name="noise_level"),
+            tf.TensorSpec(shape=[], dtype=tf.float32, name="threshold")  # Removed default parameter
+        ],
+        opset=13,
+        output_path=wake_word_path
+    )
+
+    print(f"Wake word detector converted and saved to {wake_word_path}")
+    
+    return output_path, noise_level_path, similarity_only_path, wake_word_path
 
 if __name__ == "__main__":
     # Check if TensorFlow version is compatible with tf2onnx
